@@ -10,6 +10,20 @@ from pycbc.inject import InjectionSet
 #   a way that they would overlap?
 
 class OverlapSegment(object):
+    """A class to handle time series of different detectors which are
+    overlapping in time.
+    
+    It provides functionality to shift those time series with respect to
+    one another and thereby create unique combinations.
+    
+    Arguments
+    ---------
+    timeseries : tuple of (str, TimeSeries)
+        One or multiple tuples where the first entry specifies the
+        detector and the second argument is the actual time series.
+    duration : {None or float, None}
+        The required duration of the overlapping region.
+    """
     def __init__(self, *timeseries, duration=None):
         self.duration = duration
         self.timeseries = None
