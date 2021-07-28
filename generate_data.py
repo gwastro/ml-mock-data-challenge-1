@@ -38,7 +38,7 @@ def base_path():
 
 def get_noise(dataset, start=0, duration=2592000, seed=0, psds=None,
               low_frequency_cutoff=9, sample_rate=2048,
-              filter_duration=128, padding=0):
+              filter_duration=128, padding=0, min_segment_duration=7200):
     """A function to generate real or fake noise.
     
     Arguments
@@ -83,13 +83,19 @@ def get_noise(dataset, start=0, duration=2592000, seed=0, psds=None,
     padding : {int, 0}
         <Description>
     """
+    psd_names = {0: 'aLIGOZeroDetHighPower'}
+    pdf = 1.0 / filter_duration
+    plen = int(sample_rate / pdf) // 2 + 1
     ret = {}
-    if dataset in [1, 2, 3]:
-        pdf = 1.0 / filter_duration
-        plen = int(sample_rate / pdf) // 2 + 1
+    if dataset in [1, 2]:
         if psds is None:
-            psds = {'H1': 'aLIGOZeroDetHighPower',
-                    'L1': 'aLIGOZeroDetHighPower'}
+            if dataset == 1:
+                psds = {'H1': 'aLIGOZeroDetHighPower',
+                        'L1': 'aLIGOZeroDetHighPower'}
+            elif dataset == 2:
+                rs = np.random.RandomState(seed=seed)
+                psds = {'H1': psd_names[rs.randint(0, len(psd_names))],
+                        'L1': psd_names[rs.randint(0, len(psd_names))]}
         if isinstance(psds, (FrequencySeries, str)):
             psds = {'H1': psds, 'L1': psds}
         
@@ -107,19 +113,58 @@ def get_noise(dataset, start=0, duration=2592000, seed=0, psds=None,
                 else:
                     psds[key] = pycbc.psd.from_string(val, plen, pdf,
                                                       low_frequency_cutoff)
-            ret[key] = colored_noise(psds[key],
-                                     start-padding,
-                                     start+duration+padding,
-                                     seed=seed[key],
-                                     sample_rate=sample_rate,
-                                     low_frequency_cutoff=low_frequency_cutoff)
+            ret[key] = [colored_noise(psds[key],
+                                      start-padding,
+                                      start+duration+padding,
+                                      seed=seed[key],
+                                      sample_rate=sample_rate,
+                                      low_frequency_cutoff=low_frequency_cutoff)]
+    elif dataset == 3:
+        if isinstance(seed, int):
+            rs = np.random.RandomState(seed=seed)
+            seed = {'H1': seed, 'L1': seed+1}
+        else:
+            rs = np.random.RandomState(seed=min(list(seed.values())))
+        dur = 0
+        times = []
+        while dur < duration:
+            tmp = rs.randint(min_segment_duration, duration)
+            if duration - dur - tmp < min_segment_duration:
+                tmp = duration - dur
+            if len(times) == 0:
+                times.append([0, tmp])
+            else:
+                times.append([times[-1][1], times[-1][1]+tmp])
+        
+        psds = {key: pycbc.psd.from_string(val, plen, pdf,
+                                           low_frequency_cutoff)
+                for (key, val) in psd_names}
+        
+        for key in seed.keys():
+            ret[key] = []
+        for start, end in times:
+            for key in ret.keys():
+                psdnum = rs.randint(0, len(psd_names))
+                ret[key].append(colored_noise(psds[psdnum],
+                                              start,
+                                              end,
+                                              seed=seed[key],
+                                              sample_rate=sample_rate,
+                                              low_frequency_cutoff=low_frequency_cutoff))
+        return ret
     elif dataset == 4:
+        #TODO:
+        #-Download data file if not existent
+        #-Load data from data file and put into overlap segments
+        #-Use `get` to apply seeded time-shifts
+        #-Return the resulting time shifts
         raise NotImplementedError
     else:
         raise ValueError(f'Unknown data set {dataset}')
     return ret
 
 def make_injections(strain, injection_file, f_lower=10):
+    #TODO: Use SegmentList to apply injections
     injector = InjectionSet(injection_file)
     for det, noise in strain.items():
         injector.apply(noise, det, f_lower=f_lower)

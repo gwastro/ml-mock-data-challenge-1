@@ -1,4 +1,5 @@
 import numpy as np
+import json
 from pycbc.types import TimeSeries
 from pycbc.inject import InjectionSet
 
@@ -369,3 +370,127 @@ class SegmentList(object):
             detectors = segment.detectors
             ret.append({det: ts for (det, ts) in zip(detectors, timeseries)})
         return ret
+
+class DqSegment(object):
+    def __init__(self, start, end, flag):
+        assert start <= end
+        self.start = start
+        self.end = end
+        self.flag = flag
+    
+    @property
+    def duration(self):
+        return self.end - self.start
+    
+    @classmethod
+    def from_dict(cls, dic, flag, start_key='start', end_key='end'):
+        return cls(dic[start_key], dic['end_key'], flag)
+    
+    def overlap(self, other):
+        if not isinstance(other, DqSegment):
+            raise TypeError
+        if self.start > other.end or self.end < other.start:
+            return 0
+        else:
+            nstart = max(self.start, other.start)
+            nend = min(self.end, other.end)
+            return nend - nstart
+    
+    def __contains__(self, item):
+        return self.start <= item <= self.end
+    
+    def __and__(self, other):
+        if not isinstance(other, DqSegment):
+            raise TypeError
+        if self.flag == other.flag:
+            nflag = self.flag
+        else:
+            nflag = self.flag + '&' + other.flag
+        nstart = max(self.start, other.start)
+        nend = min(self.end, other.end)
+        if nstart > nend:
+            return
+        return DqSegment(nstart, nend, nflag)
+    
+    def __or__(self, other):
+        if not isinstance(other, DqSegment):
+            raise TypeError
+        if self.start > other.end or self.end < other.start:
+            raise ValueError
+        if self.flag == other.flag:
+            nflag = self.flag
+        else:
+            nflag = self.flag + '|' + other.flag
+        nstart = min(self.start, other.start)
+        nend = max(self.end, other.end)
+        if nstart > nend:
+            return
+        return DqSegment(nstart, nend, nflag)
+    
+class DqSegmentList(object):
+    def __init__(self, dq_segments, flag=None):
+        self.dq_segments = dq_segments
+        self.flag = flag
+    
+    def min_duration(self, duration):
+        tmp = []
+        for seg in self.dq_segments:
+            if seg.duration > duration:
+                tmp.append(seg)
+        return DqSegmentList(tmp, flag=self.flag)
+    
+    @classmethod
+    def from_json(cls, fpath, flag, start_key='start', end_key='end'):
+        with open(fpath, 'r') as fp:
+            data = json.load(fp)
+        keys = sorted(list(data.keys()))
+        dq_segments = []
+        for key in keys:
+            dq_segments.append(DqSegment.from_dict(data[key], flag,
+                                                   start_key=start_key,
+                                                   end_key=end_key))
+        return cls(dq_segments, flag)
+    
+    @classmethod
+    def from_dict(cls, dic):
+        flag = dic['id'][3:]
+        dq_segments = []
+        for start, end in dic['segments']:
+            dq_segments.append(DqSegment(start, end, flag))
+        return cls(dq_segments, flag=flag)
+    
+    def __len__(self):
+        return len(self.dq_segments)
+    
+    @property
+    def duration(self):
+        return sum([seg.duration for seg in self.dq_segments])
+    
+    def __iter__(self):
+        return iter(self.dq_segments)
+    
+    def __and__(self, other):
+        if isinstance(other, DqSegment):
+            ret = []
+            for seg in self.dq_segments:
+                tmp = seg and other
+                if tmp is not None:
+                    ret.append(tmp)
+            flag = None
+            if self.flag is not None:
+                if self.flag == other.flag:
+                    flag = self.flag
+            return DqSegmentList(ret, flag=flag)
+        elif isinstance(other, DqSegmentList):
+            ret = []
+            for seg in other.dq_segments:
+                tmp = self and seg
+                ret.extend(tmp.dq_segments)
+            if self.flag is not None and other.flag is not None:
+                if self.flag == other.flag:
+                    flag = self.flag
+            return DqSegmentList(tmp, flag=flag)
+        else:
+            raise TypeError
+        
+        
