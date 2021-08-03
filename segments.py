@@ -282,8 +282,9 @@ class SegmentList(object):
         self.segments.insert(idx, segment)
     
     def apply_injections(self, injection_file, shift_injections=True,
-                         seed=None, shift_data=True,
-                         random_start_time=False):
+                         seed=None, shift_data=True, padding_start=0,
+                         padding_end=0, random_start_time=False,
+                         f_lower=None):
         """Apply injections from an injection file to a set of segments.
         
         Arguments
@@ -301,9 +302,17 @@ class SegmentList(object):
             documentation of OverlapSegment.get for more information.
         shift_data : {bool, True}
             Whether or not to shift the strain data of the segments.
+        padding_start : {float, 0}
+            The amount of time at the beginning of each segment to not
+            put injections into.
+        padding_end : {float, 0}
+            The amount of time at the end of each segment to not put
+            injections into.
         random_start_time : {bool, False}
             Randomize the start time of the segments within the
             applicable limits.
+        f_lower : {float or None, None}
+            The lower frequency cutoff of injections.
         
         Returns
         -------
@@ -347,15 +356,30 @@ class SegmentList(object):
             detectors = segment.detectors
             tmp = {}
             for det, ts in zip(detectors, timeseries):
-                #TODO: Add padding here
+                #Shift injections to appropriate start time
                 if shift_injections:
-                    addition = float(ts.start_time) - passed_dur
+                    addition = float(ts.start_time) - passed_dur + padding_start
                     injtable['tc'] += addition
-                injector.apply(ts, det)
+                
+                #Padding
+                sidx = int(padding_start // ts.delta_t)
+                eidx = -int(padding_end // ts.delta_t)
+                if eidx == 0:
+                    eidx = None
+                sub_ts = ts[sidx:eidx]
+                
+                #Apply injections
+                injector.apply(sub_ts, det, f_lower=f_lower)
+                ts.data[sidx:eidx] = sub_ts.data[:]
+                
+                #Shift injections back to original
                 if shift_injections:
                     injtable['tc'] -= addition
                 tmp[det] = ts
-            passed_dur += segment.duration
+            if segment.duration is None:
+                passed_dur += float(segment.end_time) - float(segment.start_time)
+            else:
+                passed_dur += segment.duration
             ret.append(tmp)
         
         return ret
@@ -365,10 +389,88 @@ class SegmentList(object):
             return None
         ret = []
         for segment in self.segments:
-            timeseries = segment.get(seed=seed, shift=shift_data,
+            timeseries = segment.get(seed=seed, shift=shift,
                                      random_start_time=random_start_time)
             detectors = segment.detectors
             ret.append({det: ts for (det, ts) in zip(detectors, timeseries)})
+        return ret
+    
+    def get_full(self, **kwargs):
+        gotten = self.get(**kwargs)
+        dets = self.detectors
+        ret = {det: [] for det in dets}
+        for dic in gotten:
+            seglen = max([len(ts) for ts in dic.values()])
+            dt = list(dic.values())[0].delta_t
+            epoch = float(list(dic.values())[0].start_time)
+            for det in dets:
+                if det in dic:
+                    ret[det].append(dic[det])
+                else:
+                    ret[det].append(TimeSeries(np.zeros(seglen),
+                                               delta_t=dt,
+                                               epoch=epoch))
+        return ret
+    
+    def get_full_seglist(self, **kwargs):
+        gotten = self.get(**kwargs)
+        dets = self.detectors
+        ret = SegmentList()
+        for dic in gotten:
+            seglen = len(list(dic.values())[0])
+            dt = list(dic.values())[0].delta_t
+            epoch = float(list(dic.values())[0].start_time)
+            seg = OverlapSegment()
+            for det in dets:
+                if det in dic:
+                    ts = dic[det]
+                else:
+                    ts = TimeSeries(np.zeros(seglen),
+                                    delta_t=dt,
+                                    epoch=epoch)
+                seg.add_timeseries((det, ts))
+            ret.add_segment(seg)
+        return ret
+    
+    def min_duration(self, duration):
+        segs = []
+        for seg in self.segments:
+            if seg.duration is None:
+                dur = float(seg.end_time) - float(seg.start_time)
+            else:
+                dur = seg.duration
+            if dur < duration:
+                continue
+            segs.append(seg)
+        return SegmentList(*segs)
+    
+    @property
+    def detectors(self):
+        detectors = set([])
+        for seg in self.segments:
+            detectors = detectors.union(set(seg.detectors))
+        return list(detectors)
+    
+    @property
+    def start_time(self):
+        if self.segments is None:
+            return
+        return min([seg.start_time for seg in self.segments])
+    
+    @property
+    def end_time(self):
+        if self.segments is None:
+            return
+        return max([seg.end_time for seg in self.segments])
+    
+    @property
+    def duration(self):
+        ret = 0
+        for seg in self.segments:
+            if seg.duration is None:
+                ret += seg.end_time - seg.start_time
+            else:
+                ret += seg.duration
         return ret
 
 class DqSegment(object):

@@ -54,7 +54,7 @@ def main():
                         help="The path at which to store the output.")
     parser.add_argument('--low-frequency-cutoff', type=float, default=15,
                         help="The low frequency cutoff to apply to the data.")
-    parser.add_argument('--dectectors', type=str, nargs='+', default=['H1', 'L1'],
+    parser.add_argument('--detectors', type=str, nargs='+', default=['H1', 'L1'],
                         help="The detectors to downsample data from.")
     parser.add_argument('--category', type=str, nargs='+', default=['CBC_CAT1'],
                         help="The categorie(s) of segments to consider. Default: CBC_CAT1")
@@ -84,7 +84,7 @@ def main():
             tmp = segs[det]
         else:
             tmp = tmp and segs[det]
-    segs = segs.min_duration(60 * 60 * 5) #5 hours minimum duration
+    segs = tmp.min_duration(60 * 60 * 5) #5 hours minimum duration
     
     if args.exclude_known_detections:
         logging.info('Finding known detection times')
@@ -109,12 +109,22 @@ def main():
         iterator = tqdm.tqdm(segs, desc='Downsampling segments')
     else:
         iterator = segs
+    
+    dur = 0
     for seg in iterator:
-        for det in args.detectors:
-            ts = query_and_read_frame(f'{det}_GWOSC_O3a_4KHZ_R1',
-                                      f'{det}:GWOSC-4KHZ_R1_STRAIN',
-                                        seg.start,
-                                        seg.end)
+        ts_cache = []
+        try:
+            for det in args.detectors:
+                logging.info(f'Trying segment {(seg.start, seg.end)}')
+                ts = query_and_read_frame(f'{det}_GWOSC_O3a_4KHZ_R1',
+                                          f'{det}:GWOSC-4KHZ_R1_STRAIN',
+                                            seg.start,
+                                            seg.end)
+                ts_cache.append((det, ts))
+        except:
+            logging.warn(f'Could not query data for segment {(seg.start, seg.end)}')
+            continue
+        for det, ts in ts_cache:
             ts = downsample(ts, 2048, low_freq_cutoff=args.low_frequency_cutoff)
             ts.save(args.output, group=f'{det}/{seg.start}')
     return
