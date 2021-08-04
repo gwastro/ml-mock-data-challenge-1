@@ -49,7 +49,7 @@ def download_data(path):
     path : str
         Path at which to store the file. Must end in `.hdf`.
     """
-    url = 'MISSING'
+    url = 'https://www.atlas.aei.uni-hannover.de/work/marlin.schaefer/real_noise_file.hdf'
     urllib.request.urlretrieve(url, path)
 
 def get_real_noise(path=None, min_segment_duration=None, start=0,
