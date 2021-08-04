@@ -1,5 +1,7 @@
 import numpy as np
 import json
+import h5py
+import time
 from pycbc.types import TimeSeries
 from pycbc.inject import InjectionSet
 
@@ -284,7 +286,8 @@ class SegmentList(object):
     def apply_injections(self, injection_file, shift_injections=True,
                          seed=None, shift_data=True, padding_start=0,
                          padding_end=0, random_start_time=False,
-                         f_lower=None):
+                         f_lower=None, return_times=False,
+                         return_indices=False):
         """Apply injections from an injection file to a set of segments.
         
         Arguments
@@ -313,6 +316,10 @@ class SegmentList(object):
             applicable limits.
         f_lower : {float or None, None}
             The lower frequency cutoff of injections.
+        return_times : {bool, False}
+            Return the shifted injection times.
+        return_indices : {bool, False}
+            Return injection-file indices of injected signals.
         
         Returns
         -------
@@ -320,6 +327,10 @@ class SegmentList(object):
             Returns a list of dictionaries. The key of the dictionaries
             are the detectors available from the corresponding segment.
             The values are the TimeSeries containing injections.
+        np.array, optional:
+            The injection times as shifted by the function.
+        np.array, optional:
+            The indices in the injection file of the injected signals.
         
         Notes
         -----
@@ -350,39 +361,60 @@ class SegmentList(object):
         injtable = injector.table
         passed_dur = 0
         ret = []
+        indices = []
+        injtimes = []
         for segment in self.segments:
             timeseries = segment.get(seed=seed, shift=shift_data,
                                      random_start_time=random_start_time)
             detectors = segment.detectors
+            
+            #All time series should have same start time, end time, and delta_t
+            ts = timeseries[0]
+            
+            #Shift injections to appropriate start time
+            if shift_injections:
+                addition = float(ts.start_time) - passed_dur + padding_start
+                injtable['tc'] += addition
+            
+            idxs = np.where(np.logical_and(float(ts.start_time) + padding_start <= injtable['tc'],
+                                           injtable['tc'] <= float(ts.end_time) - padding_end))[0]
+
+            indices.append(idxs)
+            injtimes.append(injtable['tc'][idxs])
+            
             tmp = {}
             for det, ts in zip(detectors, timeseries):
-                #Shift injections to appropriate start time
-                if shift_injections:
-                    addition = float(ts.start_time) - passed_dur + padding_start
-                    injtable['tc'] += addition
-                
-                #Padding
-                sidx = int(padding_start // ts.delta_t)
-                eidx = -int(padding_end // ts.delta_t)
-                if eidx == 0:
-                    eidx = None
-                sub_ts = ts[sidx:eidx]
+                tscopy = ts.copy()
                 
                 #Apply injections
-                injector.apply(sub_ts, det, f_lower=f_lower)
-                ts.data[sidx:eidx] = sub_ts.data[:]
+                injector.apply(tscopy, det, f_lower=f_lower,
+                               simulation_ids=list(idxs))
                 
-                #Shift injections back to original
-                if shift_injections:
-                    injtable['tc'] -= addition
-                tmp[det] = ts
+                tmp[det] = tscopy
+            
+            #Shift injections back to original
+            if shift_injections:
+                injtable['tc'] -= addition
+            
             if segment.duration is None:
                 passed_dur += float(segment.end_time) - float(segment.start_time)
             else:
                 passed_dur += segment.duration
             ret.append(tmp)
         
-        return ret
+        indices = np.concatenate(indices)
+        injtimes = np.concatenate(injtimes)
+        
+        if return_times:
+            if return_indices:
+                return ret, injtimes, indices
+            else:
+                return ret, injtimes
+        else:
+            if return_indices:
+                return ret, indices
+            else:
+                return ret
     
     def get(self, seed=None, shift=True, random_start_time=False):
         if self.segments is None:

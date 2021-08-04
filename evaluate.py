@@ -141,8 +141,13 @@ def main(doc):
     logging.info(f'Reading injections from {args.injection_file}')
     injparams = {}
     with h5py.File(args.injection_file, 'r') as fp:
-        for key in fp.keys():
-            injparams[key] = fp[key][()]
+        if 'shift-tc' in fp:
+            injparams['tc'] = fp['shift-tc'][()]
+            idxs = fp['shift-indices']
+            injparams['distance'] = fp['distance'][()][idxs]
+        else:
+            injparams['tc'] = fp['tc'][()]
+            injparams['distance'] = fp['distance'][()]
     
     #Read foreground events
     logging.info(f'Reading foreground events from {args.foreground_events}')

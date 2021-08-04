@@ -24,8 +24,6 @@ from segments import OverlapSegment, SegmentList
 #-Implement storage of command into final file
 #-Add a docstring
 #-Add reference to what kind of data the different sets contain
-#-Add injection time adjustments in the injection file when applying
-# injections
 
 TIME_STEP = 16
 TIME_WINDOW = 6
@@ -138,7 +136,7 @@ def get_real_noise(path=None, min_segment_duration=None, start=0,
                 ts = TimeSeries(fp[key][sidx:eidx],
                                 delta_t=fp[key].attrs['delta_t'],
                                 epoch=fp[key].attrs['start_time']+stoffset)
-                seg.add_timeseries((det, ts))
+                seg.add_timeseries((det, ts.astype(np.float64)))
             if seg.duration is None:
                 seg.duration = float(seg.end_time) - float(seg.start_time) - slide_buffer
             
@@ -336,13 +334,22 @@ def make_injections(strain, injection_file, f_lower=10, padding_start=0,
         A dictionary, where the keys are detector names and the values
         are lists containing PyCBC TimeSeries. The TimeSeries are the
         background segments plus the added injections.
+    injtimes:
+        Array containing the (shifted) injection times that were
+        actually made.
+    injidxs:
+        Array containing the indices of the injection-parameters that
+        were actually made.
     """
     dets = strain.detectors
     ret = {det: [] for det in dets}
-    inj = strain.apply_injections(injection_file, shift_data=False,
-                                  padding_start=padding_start,
-                                  padding_end=padding_end,
-                                  f_lower=f_lower)
+    inj, injtimes, injidxs = strain.apply_injections(injection_file,
+                                                     shift_data=False,
+                                                     padding_start=padding_start,
+                                                     padding_end=padding_end,
+                                                     f_lower=f_lower,
+                                                     return_times=True,
+                                                     return_indices=True)
     
     for dic in inj:
         seglen = len(list(dic.values())[0])
@@ -356,7 +363,7 @@ def make_injections(strain, injection_file, f_lower=10, padding_start=0,
                                 delta_t=dt,
                                 epoch=epoch)
                 ret[det].append(ts)
-    return ret
+    return ret, injtimes, injidxs
 
 def save_strain_dict(strain_dict, path, force=False):
     """Save dictionary of strain as produced by the code to a file.
@@ -531,10 +538,16 @@ def main(doc):
         logging.info('No output for the foreground file was specified. Skipping injections.')
         return
     
-    fg_dict = make_injections(strain, args.injection_file, f_lower=10,
-                              padding_start=args.padding_start,
-                              padding_end=args.padding_end)
+    fg_dict, injtimes, injidxs = make_injections(strain,
+                                                 args.injection_file,
+                                                 f_lower=10,
+                                                 padding_start=args.padding_start,
+                                                 padding_end=args.padding_end)
     
+    if args.output_injection_file is not None:
+        with h5py.File(args.output_injection_file, 'a') as fp:
+            fp['shift-tc'] = injtimes
+            fp['shift-indices'] = injidxs
     
     save_strain_dict(fg_dict,
                      args.output_foreground_file,
