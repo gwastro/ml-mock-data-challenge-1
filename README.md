@@ -1,9 +1,9 @@
-# MLGWSC-1 - Machine Learning Gravitational-Wave Search (Mock Data) Challange
+# MLGWSC-1 - Machine Learning Gravitational-Wave Search (Mock Data) Challenge
 
 ## Introduction
 
 Welcome to the first machine learning gravitational-wave search mock 
-data challange hosted by the Albert-Einstein-Institut Hannover and the 
+data challenge hosted by the Albert-Einstein-Institut Hannover and the 
 Friedrich-Schiller Universität Jena. In this challenge participants are 
 tasked with finding gravitational-wave signals of varying complexity in 
 a noisy background. Entries are evaluated on metrics which are used to 
