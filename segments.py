@@ -45,7 +45,7 @@ class OverlapSegment(object):
     def end_time(self):
         if self.timeseries is None:
             return None
-        return max([ts.end_time for ts in self.timeseries])
+        return min([ts.end_time for ts in self.timeseries])
     
     @property
     def delta_t(self):
@@ -90,7 +90,7 @@ class OverlapSegment(object):
         return
     
     def get(self, seed=None, shift=True, random_start_time=False):
-        return self.get2(seed=seed, shift=shift,
+        return self.get3(seed=seed, shift=shift,
                          random_start_time=random_start_time)
      
     def get1(self, seed=None, shift=True, random_start_time=False):
@@ -204,6 +204,68 @@ class OverlapSegment(object):
         
         #Handle upper
         for ind, ts in zip(indices, self.timeseries):
+            rsmin = -ind[0]
+            rsmax = len(ts) - ind[1]
+            if rsmin >= rsmax:
+                shiftidx = 0
+            else:
+                shiftidx = rs.randint(rsmin, rsmax)
+            sidx = ind[0] + shiftidx
+            eidx = ind[1] + shiftidx
+            dat = ts.data[sidx:eidx]
+            ret.append(TimeSeries(dat, epoch=start_time,
+                                  delta_t=self.delta_t))
+        
+        return ret
+    
+    def get3(self, seed=None, shift=True, random_start_time=False):
+        """Shift only the last n-1 time series and keep the first one
+        fixed.
+        """
+        if self.timeseries is None:
+            return
+        
+        rs = np.random.RandomState(seed=seed)
+        
+        if random_start_time and self.duration is not None:
+            mintime = float(self.start_time)
+            maxtime = float(self.end_time) - float(self.duration)
+            if maxtime > mintime:
+                start_time = rs.uniform(mintime, maxtime)
+            else:
+                start_time = mintime
+        else:
+            start_time = float(self.start_time)
+        
+        indices = []
+        for ts in self.timeseries:
+            start = int((float(self.start_time) - float(ts.start_time))
+                        / ts.delta_t)
+            if self.duration is None:
+                end = int((float(self.end_time) - float(ts.start_time))
+                          / ts.delta_t)
+            else:
+                end = start + int(self.duration / ts.delta_t)
+            if len(indices) > 0:
+                assert (end - start) == (indices[-1][1] - indices[-1][0])
+            indices.append((start, end))
+        
+        ret = []
+        if not shift:
+            for i, ts in enumerate(self.timeseries):
+                ret.append(TimeSeries(ts.data[indices[i][0]:indices[i][1]],
+                                      epoch=start_time,
+                                      delta_t=ts.delta_t))
+            return ret
+        
+        #Handle upper
+        for i, (ind, ts) in enumerate(zip(indices, self.timeseries)):
+            if i == 0:
+                sidx, eidx = ind
+                dat = ts.data[sidx:eidx]
+                ret.append(TimeSeries(dat, epoch=start_time,
+                                      delta_t=self.delta_t))
+                continue
             rsmin = -ind[0]
             rsmax = len(ts) - ind[1]
             if rsmin >= rsmax:
