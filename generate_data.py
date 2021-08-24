@@ -11,7 +11,8 @@ import warnings
 from shutil import copy
 import subprocess
 import time
-import urllib.request
+import requests
+import tqdm
 
 from pycbc.noise.reproduceable import colored_noise
 import pycbc.psd
@@ -41,16 +42,46 @@ def base_path():
 def get_default_path():
     return os.path.join(base_path(), 'real_noise_file.hdf')
 
-def download_data(path):
+def download_data(path, resume=True):
     """Download noise data from the central server.
     
     Arguments
     ---------
     path : str
         Path at which to store the file. Must end in `.hdf`.
+    resume : {bool, True}
+        Resume the file download if it was interrupted.
     """
+    assert os.path.splitext(path)[1] == '.hdf'
     url = 'https://www.atlas.aei.uni-hannover.de/work/marlin.schaefer/real_noise_file.hdf'
-    urllib.request.urlretrieve(url, path)
+    header = {}
+    resume_size = 0
+    if os.path.isfile(path) and resume:
+        mode = 'ab'
+        resume_size = os.path.getsize(path)
+        header['Range'] = f'bytes={resume_size}-'
+    else:
+        mode = 'wb'
+    with open(path, mode) as fp:
+        response = requests.get(url, stream=True, headers=header)
+        total_size = response.headers.get('content-length')
+
+        if total_size is None:
+            print("No file length found")
+            fp.write(response.content)
+        else:
+            total_size = int(total_size)
+            desc = f"Downloading real_noise_file.hdf to {path}"
+            print(desc)
+            with tqdm.tqdm(total=int(total_size),
+                           unit='B',
+                           unit_scale=True,
+                           dynamic_ncols=True,
+                           desc="Progress: ",
+                           initial=resume_size) as progbar:
+                for data in response.iter_content(chunk_size=4000):
+                    fp.write(data)
+                    progbar.update(4000)
 
 def get_real_noise(path=None, min_segment_duration=None, start=0,
                    duration=2592000, slide_buffer=None):
@@ -86,6 +117,13 @@ def get_real_noise(path=None, min_segment_duration=None, start=0,
     
     if not os.path.isfile(path):
         download_data(path)
+    
+    #If file can't be opened it is probably not done downloading.
+    try:
+        with h5py.File(path, 'r') as fp:
+            fp.attrs
+    except:
+        download_data(path, resume=True)
     
     seglist = SegmentList()
     with h5py.File(path, 'r') as fp:
@@ -546,8 +584,14 @@ def main(doc):
     
     if args.output_injection_file is not None:
         with h5py.File(args.output_injection_file, 'a') as fp:
-            fp['shift-tc'] = injtimes
-            fp['shift-indices'] = injidxs
+            if 'shift-tc' in fp.keys():
+                fp['shift-tc'][:] = injtimes
+            else:
+                fp.create_dataset('shift-tc', injtimes)
+            if 'shift-indices' in fp.keys():
+                fp['shift-indices'][:] = injtimes
+            else:
+                fp.create_dataset('shift-indices', injtimes)
     
     save_strain_dict(fg_dict,
                      args.output_foreground_file,

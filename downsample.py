@@ -9,6 +9,9 @@ import tqdm
 from pycbc.filter import resample_to_delta_t, highpass
 from pycbc.frame import query_and_read_frame
 from pycbc.catalog import Catalog
+from pycbc import dq
+
+from ligo.segments import segmentlist, segment
 
 from segments import DqSegment, DqSegmentList
 
@@ -21,30 +24,19 @@ def downsample(strain, sample_rate, low_freq_cutoff=None, dtype=None):
     else:
         return res.astype(dtype)
 
-def download_segment_data(run, det, cat, start, end):
-    url = 'https://www.gw-openscience.org/timeline/segments/json/{}/{}_{}/{}/{}/'.format(run, det, cat, start, end)
-    
-    with urllib.request.urlopen(url) as response:
-        data = response.read().decode('utf-8')
-        data = json.loads(data)
-    return data
-
-def get_segments(dets, cats):
+def get_segments(dets):
+    start_time = 1238166018 #Start O3a
+    end_time = 1253977218 #End O3a
     ret = {}
     if not isinstance(dets, (list, tuple)):
         dets = [dets]
-    if not isinstance(cats, (list, tuple)):
-        cats = [cats]
     for det in dets:
-        detsegs = None
-        for cat in cats:
-            data = download_segment_data('O3a_4KHZ_R1', det, cat,
-                                         1238166018, 1253977218)
-            if detsegs is None:
-                detsegs = DqSegmentList.from_dict(data)
-            else:
-                detsegs = detsegs and DqSegmentList.from_dict(data)
-        ret[det] = detsegs
+        seglist = dq.query_flag(det, 'DATA', start_time, end_time)
+        seglist -= dq.query_flag(det, 'CBC_CAT1_VETO', start_time, end_time)
+        seglist -= dq.query_flag(det, 'CBC_CAT2_VETO', start_time, end_time)
+        seglist -= dq.query_flag(det, 'CBC_HW_INJ', start_time, end_time)
+        seglist -= dq.query_flag(det, 'BURST_HW_INJ', start_time, end_time)
+        ret[det] = seglist
     return ret
 
 def main():
@@ -56,10 +48,12 @@ def main():
                         help="The low frequency cutoff to apply to the data.")
     parser.add_argument('--detectors', type=str, nargs='+', default=['H1', 'L1'],
                         help="The detectors to downsample data from.")
-    parser.add_argument('--category', type=str, nargs='+', default=['CBC_CAT1'],
-                        help="The categorie(s) of segments to consider. Default: CBC_CAT1")
     parser.add_argument('--exclude-known-detections', action='store_true',
                         help="Exclude segments that contain known events.")
+    parser.add_argument('--minimum-duration', type=int, default=5*60*60,
+                        help="The minimum duration of any segment.")
+    parser.add_argument('--merger-exclude-time', type=float, default=10,
+                        help="The symmetric minimum duration in seconds around known detections to exclude. Default: 10")
     parser.add_argument('--verbose', action='store_true',
                         help="Print status updates.")
     parser.add_argument('--force', action='store_true',
@@ -76,32 +70,35 @@ def main():
         raise IOError(f'File {args.output} already exists. Set the flag --force to overwrite it.')
     
     #Get list of segments that have sufficient data quality and duration
-    logging.info(f'Grabbing segments for detectors {args.detectors} of categories {args.category}')
-    segs = get_segments(args.detectors, args.category)
+    logging.info(f'Grabbing segments for detectors {args.detectors}')
+    segs = get_segments(args.detectors)
     tmp = None
     for det in args.detectors:
         if tmp is None:
             tmp = segs[det]
         else:
             tmp = tmp and segs[det]
-    segs = tmp.min_duration(60 * 60 * 5) #5 hours minimum duration
+    segs = tmp
     
     if args.exclude_known_detections:
+        exclude_segs = segmentlist([])
         logging.info('Finding known detection times')
         catalog = Catalog(source='gwtc-2')
-        exclude_times = [merger.time for merger in catalog.mergers.values()]
-        tmp = []
-        logging.info('Excluding known detection times')
-        for seg in segs:
-            found = False
-            for t in exclude_times:
-                if t in seg:
-                    found = True
-                    break;
-            if not found:
-                tmp.append(seg)
-        tmp = sorted(tmp, key=lambda seg: seg.start)
-        segs = DqSegmentList(tmp, flag=segs.flag)
+        for merger in catalog.mergers.values():
+            start = int(merger.time - args.merger_exclude_time)
+            end = int(np.ceil(merger.time + args.merger_exclude_time))
+            exclude_segs.append(segment(start, end))
+        exclude_segs.coalesce()
+        segs -= exclude_segs
+    
+    #Enforce minimum duration
+    tmp = segmentlist([])
+    for seg in segs:
+        if seg[1] - seg[0] < args.minimum_duration:
+            continue
+        tmp.append(seg)
+    tmp.coalesce()
+    segs = tmp
     
     #Access segments one by one
     strlen = len(str(len(segs)))
@@ -113,20 +110,22 @@ def main():
     dur = 0
     for seg in iterator:
         ts_cache = []
+        start, end = seg
         try:
             for det in args.detectors:
-                logging.info(f'Trying segment {(seg.start, seg.end)}')
+                logging.info(f'Trying segment {(start, end)}')
                 ts = query_and_read_frame(f'{det}_GWOSC_O3a_4KHZ_R1',
                                           f'{det}:GWOSC-4KHZ_R1_STRAIN',
-                                            seg.start,
-                                            seg.end)
+                                            start,
+                                            end)
                 ts_cache.append((det, ts))
-        except:
-            logging.warn(f'Could not query data for segment {(seg.start, seg.end)}')
+        except Exception as e:
+            logging.warn(f'Could not query data for segment {(start, end)}')
+            print(e)
             continue
         for det, ts in ts_cache:
             ts = downsample(ts, 2048, low_freq_cutoff=args.low_frequency_cutoff)
-            ts.save(args.output, group=f'{det}/{seg.start}')
+            ts.save(args.output, group=f'{det}/{start}')
     return
 
 if __name__ == "__main__":
