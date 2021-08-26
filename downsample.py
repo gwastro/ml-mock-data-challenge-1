@@ -120,12 +120,49 @@ def main():
                                             end)
                 ts_cache.append((det, ts))
         except Exception as e:
+            #Skip any segments that could not be fetched
             logging.warn(f'Could not query data for segment {(start, end)}')
-            print(e)
             continue
+        
+        #Check for stretches in the queried data still containing NaNs
+        nanidxs = segmentlist([])
+        
         for det, ts in ts_cache:
-            ts = downsample(ts, 2048, low_freq_cutoff=args.low_frequency_cutoff)
-            ts.save(args.output, group=f'{det}/{start}')
+            idxs = np.where(np.isnan(ts.numpy()))[0]
+            if len(idxs) == 0:
+                continue
+            if len(idxs) == 1:
+                nanidxs.append(segment([idxs[0], idxs[0]+1]))
+            tmp = [[idxs[0]]]
+            for idx in idxs[1:]:
+                if len(tmp[-1]) == 1:
+                    tmp[-1].append(idx+1)
+                else:
+                    if tmp[-1][1] == idx:
+                        tmp[-1][1] = idx + 1
+                    else:
+                        tmp.append([idx])
+            if len(tmp[-1]) == 1:
+                tmp[-1].append(tmp[-1][0] + 1)
+            for ind in tmp:
+                nanidxs.append(segment(ind))
+        
+        nanidxs.coalesce()
+        keepsegs = segmentlist([segment(0, len(ts_cache[0][1]))])
+        keepsegs -= nanidxs
+        
+        #Store segments which satisfy the minimum duration requirement
+        for det, ts in ts_cache:
+            for seg in keepsegs:
+                tmp = ts[slice(*seg)]
+                if tmp.duration < args.minimum_duration:
+                    continue
+                else:
+                    tmp = downsample(tmp,
+                                    2048,
+                                    low_freq_cutoff=args.low_frequency_cutoff)
+                    start_time = int(float(tmp.start_time))
+                    tmp.save(args.output, group=f'{det}/{start_time}')
     return
 
 if __name__ == "__main__":
