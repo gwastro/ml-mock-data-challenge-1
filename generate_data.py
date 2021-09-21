@@ -685,7 +685,8 @@ def main(doc):
                "thus no background file will be generated or stored!")
         warnings.warn(msg, RuntimeWarning)
         tmp_bg = True
-        args.output_background_file
+        args.output_background_file = os.path.join(base_path(),
+                                                   f'TMP-{time.time()}-BG.hdf')
     
     #Test if files already exist
     fpath = args.output_injection_file
@@ -701,62 +702,72 @@ def main(doc):
         assert os.path.splitext(fpath)[1] == '.hdf', 'File path must end in `.hdf`'
         check_file_existence(fpath, args.force, delete=True)
     
-    #Generate noise background
-    logging.info('Getting noise')
-    get_noise(args.data_set, start_offset=args.start_offset,
-              duration=args.duration, seed=args.seed,
-              store=args.output_background_file, force=args.force)
-    
-    segs = load_segments()
-    tstart, tend = segs.extent()
-    
-    #Take care of injections
     tmp_inj = False
-    if args.injection_file is None:
-        #Create injections
-        logging.info('Generating injections')
-        inj_config_paths = {1: os.path.join(base_path(), 'ds1.ini'),
-                            2: os.path.join(base_path(), 'ds2.ini'),
-                            3: os.path.join(base_path(), 'ds3.ini'),
-                            4: os.path.join(base_path(), 'ds4.ini')}
-        cmd = ['pycbc_create_injections']
-        cmd += ['--config-files', str(inj_config_paths[args.data_set])]
-        cmd += ['--gps-start-time', str(tstart)]
-        cmd += ['--gps-end-time', str(tend)]
-        cmd += ['--time-step', str(TIME_STEP)]
-        cmd += ['--time-window', str(TIME_WINDOW)]
-        cmd += ['--seed', str(args.seed)]
-        if args.output_injection_file is None:
-            args.injection_file = os.path.join(base_path(),
-                                               f'TMP-{time.time()}.hdf')
-            tmp_inj = True
-        else:
-            args.injection_file = args.output_injection_file
-        cmd += ['--output-file', args.injection_file]
-        if args.verbose:
-            cmd += ['--verbose']
-        subprocess.call(cmd)
-    elif args.output_injection_file is not None:
-        #Copy injection file
-        copy(args.injection_file, args.output_injection_file)
-    
-    if args.output_foreground_file is None:
-        logging.info('No output for the foreground file was specified. Skipping injections.')
-        return
-    
-    make_injections(args.output_background_file,
-                    args.injection_file,
-                    f_lower=10,
-                    padding_start=30,
-                    padding_end=30,
-                    store=args.output_foreground_file,
-                    force=args.force)
-    logging.info(f'Saved foreground to {args.output_foreground_file}')
-    
-    if tmp_bg:
-        os.remove(args.output_background_file)
-    if tmp_inj:
-        os.remove(args.injection_file)
+    try:
+        #Generate noise background
+        logging.info('Getting noise')
+        get_noise(args.data_set, start_offset=args.start_offset,
+                  duration=args.duration, seed=args.seed,
+                  store=args.output_background_file, force=args.force)
+        
+        segs = load_segments()
+        tstart, tend = segs.extent()
+        
+        #Take care of injections
+        if args.injection_file is None:
+            #Create injections
+            logging.info('Generating injections')
+            inj_config_paths = {1: os.path.join(base_path(), 'ds1.ini'),
+                                2: os.path.join(base_path(), 'ds2.ini'),
+                                3: os.path.join(base_path(), 'ds3.ini'),
+                                4: os.path.join(base_path(), 'ds4.ini')}
+            cmd = ['pycbc_create_injections']
+            cmd += ['--config-files', str(inj_config_paths[args.data_set])]
+            cmd += ['--gps-start-time', str(tstart)]
+            cmd += ['--gps-end-time', str(tend)]
+            cmd += ['--time-step', str(TIME_STEP)]
+            cmd += ['--time-window', str(TIME_WINDOW)]
+            cmd += ['--seed', str(args.seed)]
+            if args.output_injection_file is None:
+                args.injection_file = os.path.join(base_path(),
+                                                   f'TMP-{time.time()}-INJ.hdf')
+                tmp_inj = True
+            else:
+                args.injection_file = args.output_injection_file
+            cmd += ['--output-file', args.injection_file]
+            if args.verbose:
+                cmd += ['--verbose']
+            subprocess.call(cmd)
+        elif args.output_injection_file is not None:
+            #Copy injection file
+            copy(args.injection_file, args.output_injection_file)
+        
+        if args.output_foreground_file is None:
+            logging.info('No output for the foreground file was specified. Skipping injections.')
+            return
+        
+        make_injections(args.output_background_file,
+                        args.injection_file,
+                        f_lower=10,
+                        padding_start=30,
+                        padding_end=30,
+                        store=args.output_foreground_file,
+                        force=args.force)
+        logging.info(f'Saved foreground to {args.output_foreground_file}')
+    except Exception as e:
+        if tmp_bg and args.output_background_file is not None:
+            if os.path.isfile(args.output_background_file):
+                os.remove(args.output_background_file)
+        if tmp_inj and args.injection_file is not None:
+            if os.path.isfile(args.injection_file):
+                os.remove(args.injection_file)
+        raise e
+    if tmp_bg and args.output_background_file is not None:
+        if os.path.isfile(args.output_background_file):
+            os.remove(args.output_background_file)
+    if tmp_inj and args.injection_file is not None:
+        if os.path.isfile(args.injection_file):
+            os.remove(args.injection_file)
     return
 
 if __name__ == "__main__":
