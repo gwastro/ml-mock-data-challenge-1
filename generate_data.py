@@ -341,7 +341,7 @@ class NoiseGenerator(object):
                           'aLIGOLateHighSensitivityP1200087',
                           'aLIGOMidHighSensitivityP1200087']}
     def __init__(self, dataset, seed=0, filter_duration=128,
-                 sample_rate=2048, low_frequency_cutoff=9,
+                 sample_rate=2048, low_frequency_cutoff=15,
                  detectors=['H1', 'L1']):
         if dataset not in [1, 2, 3]:
             raise ValueError(f'PsdGenerator is only defined for datasets 1, 2, and 3.')
@@ -436,7 +436,7 @@ class NoiseGenerator(object):
         return ret
 
 def get_noise(dataset, start_offset=0, duration=2592000, seed=0,
-              low_frequency_cutoff=9, sample_rate=2048,
+              low_frequency_cutoff=15, sample_rate=2048,
               filter_duration=128, min_segment_duration=7200,
               slide_buffer=240, real_noise_path=None,
               generate_duration=3600, segment_path=None,
@@ -458,7 +458,7 @@ def get_noise(dataset, start_offset=0, duration=2592000, seed=0,
         both in the case that noise is simulated as well as when real
         noise is used. In the latter case it will determin by how much
         the individual detectors are shifted by.
-    low_frequency_cutoff : {float, 9}
+    low_frequency_cutoff : {float, 15}
         The low frequency cutoff for the noise. (Only noise with
         frequencies larger than the specified value will be generated)
     sample_rate : {int, 2048}
@@ -541,7 +541,7 @@ def get_noise(dataset, start_offset=0, duration=2592000, seed=0,
     else:
         raise ValueError(f'Unknown data set {dataset}')
 
-def make_injections(fpath, injection_file, f_lower=10, padding_start=0,
+def make_injections(fpath, injection_file, f_lower=20, padding_start=0,
                     padding_end=0, store=None, force=False):
     """Inject waveforms into background.
     
@@ -748,7 +748,7 @@ def main(doc):
         
         make_injections(args.output_background_file,
                         args.injection_file,
-                        f_lower=10,
+                        f_lower=20,
                         padding_start=30,
                         padding_end=30,
                         store=args.output_foreground_file,
