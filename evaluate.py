@@ -5,6 +5,31 @@ import argparse
 import numpy as np
 import h5py
 import os
+import logging
+
+def find_injection_times(fgfile, injfile, padding_start=0, padding_end=0):
+    duration = 0
+    with h5py.File(fgfile, 'r') as fp:
+        det = list(fp.keys())[0]
+        times = []
+        for key in fp[det].keys():
+            ds = fp[f'{det}/{key}']
+            start = ds.attrs['start_time']
+            end = start + len(ds) * ds.attrs['delta_t']
+            duration += end - start
+            start += padding_start
+            end -= padding_end
+            if end > start:
+                times.append([start, end])
+    
+    with h5py.File(injfile, 'r') as fp:
+        injtimes = fp['tc'][()]
+    
+    ret = np.full((len(times), len(injtimes)), False)
+    for i, (start, end) in enumerate(times):
+        ret[i] = np.logical_and(start <= injtimes, injtimes <= end)
+    
+    return duration, np.any(ret, axis=0)
 
 def get_stats(fgevents, bgevents, injparams, duration=None):
     ret = {}
@@ -18,7 +43,7 @@ def get_stats(fgevents, bgevents, injparams, duration=None):
     
     logging.info('Finding injection times closest to event times')
     maxidxs = np.searchsorted(injtimes, fgevents[0], side='right')
-    minidxs = np.maximum(minidxs - 1, 0)
+    minidxs = np.maximum(maxidxs - 1, 0)
     maxidxs = np.minimum(maxidxs, len(injtimes) - 1)
     lowdiff = np.abs(injtimes[minidxs] - fgevents[0])
     highdiff = np.abs(injtimes[maxidxs] - fgevents[0])
@@ -37,6 +62,7 @@ def get_stats(fgevents, bgevents, injparams, duration=None):
     
     tpevents = fgevents.T[tpidxs].T
     fpevents = fgevents.T[fpidxs].T
+    ufpvals = np.unique(fpevents[1])
     
     ret['fg-events'] = fgevents
     ret['found-indices'] = np.arange(len(injtimes))[idxs]
@@ -56,9 +82,9 @@ def get_stats(fgevents, bgevents, injparams, duration=None):
     logging.info('Calculating foreground FAR')
     noise_stats = fpevents[1].copy()
     noise_stats.sort()
-    fgfar = len(noise_stats) - np.searchsorted(noise_stats, fgevents[1],
-                                             side='left')
-    fgfar /= duration
+    fgfar = len(noise_stats) - np.searchsorted(noise_stats, tpevents[1],
+                                               side='left')
+    fgfar = fgfar / duration
     ret['fg-far'] = fgfar
     sfaridxs = fgfar.argsort()
     
@@ -66,9 +92,9 @@ def get_stats(fgevents, bgevents, injparams, duration=None):
     logging.info('Calculating background FAR')
     noise_stats = bgevents[1].copy()
     noise_stats.sort()
-    far = len(noise_stats) - np.searchsorted(noise_stats, fgevents[1],
+    far = len(noise_stats) - np.searchsorted(noise_stats, tpevents[1],
                                              side='left')
-    far /= duration
+    far = far / duration
     ret['far'] = far
     
     #Calculate sensitivity
@@ -81,7 +107,7 @@ def get_stats(fgevents, bgevents, injparams, duration=None):
     Ninj = len(dist)
     prefactor = vtot / Ninj
     
-    nfound = len(tp_sort) - np.searchsorted(tp_sort, fgevents[1],
+    nfound = len(tp_sort) - np.searchsorted(tp_sort, tpevents[1],
                                             side='left')
     sample_variance = nfound / Ninj - (nfound / Ninj) ** 2
     vol = prefactor * nfound
@@ -106,17 +132,21 @@ def main(doc):
                         help=("Path to the file containing the events "
                               "returned by the search on the foreground "
                               "data set as returned by "
-                              "`generate_data.py --output-foreground-file`. <Describe file content>"))
+                              "`generate_data.py --output-foreground-file`."))
+    parser.add_argument('--foreground-file', type=str, required=True,
+                        help=("Path to the file containing the analyzed "
+                              "foreground data output by"
+                              "`generate_data.py --output-foreground-file`."))
     parser.add_argument('--background-events', type=str, required=True,
                         help=("Path to the file containing the events "
                               "returned by the search on the background"
                               "data set as returned by "
-                              "`generate_data.py --output-background-file`. <Describe file content>"))
+                              "`generate_data.py --output-background-file`."))
     parser.add_argument('--output-file', type=str, required=True,
                         help=("Path at which to store the output HDF5 "
                               "file. (Path must end in `.df`)"))
-    parser.add_argument('--duration', type=float,
-                        help="Set the duration of analyzed data.")
+    # parser.add_argument('--duration', type=float,
+    #                     help="Set the duration of analyzed data.")
     
     parser.add_argument('--verbose', action='store_true',
                         help="Print update messages.")
@@ -137,17 +167,19 @@ def main(doc):
     if os.path.isfile(args.output_file) and not args.force:
         raise IOError(f'The file {args.output_file} already exists. Set the flag `force` to overwrite it.')
     
+    #Find indices contained in foreground file
+    logging.info(f'Finding injections contained in data')
+    dur, idxs = find_injection_times(args.foreground_file,
+                                     args.injection_file,
+                                     padding_start=30,
+                                     padding_end=30)
+    
     #Read injection parameters
     logging.info(f'Reading injections from {args.injection_file}')
     injparams = {}
     with h5py.File(args.injection_file, 'r') as fp:
-        if 'shift-tc' in fp:
-            injparams['tc'] = fp['shift-tc'][()]
-            idxs = fp['shift-indices']
-            injparams['distance'] = fp['distance'][()][idxs]
-        else:
-            injparams['tc'] = fp['tc'][()]
-            injparams['distance'] = fp['distance'][()]
+        injparams['tc'] = fp['tc'][()][idxs]
+        injparams['distance'] = fp['distance'][()][idxs]
     
     #Read foreground events
     logging.info(f'Reading foreground events from {args.foreground_events}')
@@ -164,7 +196,7 @@ def main(doc):
                                fp['var']])
     
     stats = get_stats(fg_events, bg_events, injparams,
-                      duration=args.duration)
+                      duration=dur)
     
     
     #Store results
