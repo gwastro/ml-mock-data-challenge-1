@@ -33,12 +33,16 @@ import ligo.segments
 TIME_STEP = 16
 TIME_WINDOW = 6
 
-def check_file_existence(fpath, force):
+def check_file_existence(fpath, force, delete=False):
     if fpath is not None:
-        if os.path.isfile(fpath) and not force:
-            msg = f'The file {fpath} already exists. Set the flag '
-            msg += '`--force` to overwrite existing files.'
-            raise IOError(msg)
+        if os.path.isfile(fpath):
+            if force:
+                if delete:
+                    os.remove(fpath)
+            else:
+                msg = f'The file {fpath} already exists. Set the flag '
+                msg += '`--force` to overwrite existing files.'
+                raise IOError(msg)
 
 def base_path():
     return os.path.split(os.path.abspath(__file__))[0]
@@ -46,16 +50,19 @@ def base_path():
 def get_default_path():
     return os.path.join(base_path(), 'real_noise_file.hdf')
 
-def download_data(path, resume=True):
+def download_data(path=None, resume=True):
     """Download noise data from the central server.
     
     Arguments
     ---------
-    path : str
-        Path at which to store the file. Must end in `.hdf`.
+    path : {str or None, None}
+        Path at which to store the file. Must end in `.hdf`. If set to
+        None a default path will be used.
     resume : {bool, True}
         Resume the file download if it was interrupted.
     """
+    if path is None:
+        path = get_default_path()
     assert os.path.splitext(path)[1] == '.hdf'
     url = 'https://www.atlas.aei.uni-hannover.de/work/marlin.schaefer/MDC/real_noise_file.hdf'
     header = {}
@@ -208,8 +215,6 @@ def store_ts(path, det, ts, force=False):
     """
     if path is None:
         return
-    if os.path.isfile(path) and not force:
-        raise IOError(f'File {path} already exists')
     
     group = f'{det}/{int(ts.start_time)}'
     ts.save(path, group=group)
@@ -327,8 +332,14 @@ def get_real_noise(path=None, min_segment_duration=None, start_offset=0,
         return
 
 class NoiseGenerator(object):
-    psd_options = {'H1': ['aLIGOZeroDetHighPower'],
-                   'L1': ['aLIGOZeroDetHighPower']}
+    psd_options = {'H1': ['aLIGOZeroDetHighPower',
+                          'aLIGOZeroDetLowPower',
+                          'aLIGOLateHighSensitivityP1200087',
+                          'aLIGOMidHighSensitivityP1200087'],
+                   'L1': ['aLIGOZeroDetHighPower',
+                          'aLIGOZeroDetLowPower',
+                          'aLIGOLateHighSensitivityP1200087',
+                          'aLIGOMidHighSensitivityP1200087']}
     def __init__(self, dataset, seed=0, filter_duration=128,
                  sample_rate=2048, low_frequency_cutoff=9,
                  detectors=['H1', 'L1']):
@@ -351,23 +362,28 @@ class NoiseGenerator(object):
     def get(self, start, end, generate_duration=3600):
         keys = {}
         if self.dataset == 1:
+            logging.debug(f'Called with dataset 1')
             for det in self.detectors:
                 keys[det] = 'aLIGOZeroDetHighPower'
         elif self.dataset == 2:
+            logging.debug(f'Called with dataset 2')
             for det in self.detectors:
                 if self.fixed_psds[det] is None:
                     key = self.rs.randint(0, len(self.psd_options[det]))
                     self.fixed_psds[det] = self.psd_options[det][key]
                 keys[det] = self.fixed_psds[det]
         elif self.dataset == 3:
+            logging.debug(f'Called with dataset 3')
             for det in self.detectors:
                 key = self.rs.randint(0, len(self.psd_options[det]))
                 keys[det] = self.psd_options[det][key]
         else:
             raise RuntimeError(f'Unkown dataset {self.dataset}.')
         
+        logging.debug(f'Generated keys {keys}')
         ret = {}
         for det, key in keys.items():
+            logging.debug(f'Starting generating process for detector {det} and key {key}')
             if isinstance(key, str): #Normal case
                 if os.path.isfile(key): #Check if we have to load PSD
                     try:
@@ -382,6 +398,7 @@ class NoiseGenerator(object):
                                                  is_asd_file=True)
                 else:
                     #Try to interpret string as key known to PyCBC
+                    logging.debug(f'Now generating PSD from string {key}')
                     psd = pycbc.psd.from_string(key,
                                                 self.plen,
                                                 self.delta_f,
@@ -389,23 +406,32 @@ class NoiseGenerator(object):
             
             if generate_duration is None:
                 generate_duration = end - start
+                logging.debug(f'Generate duration was None')
+            logging.debug(f'Generate duration set to {generate_duration}')
             done_duration = 0
             noise = None
             #Generate time series noise in chunks
             while done_duration < end - start:
+                logging.debug(f'Start of loop with done_duration: {done_duration}')
                 segstart = start + done_duration
                 segend = min(end, segstart + generate_duration)
+                logging.debug(f'Generation segment: {(segstart, segend)} of duration {segend - segstart}')
                 tmp = colored_noise(psd,
                                     segstart,
                                     segend,
                                     seed=self.seed,
                                     sample_rate=self.sample_rate,
                                     low_frequency_cutoff=self.low_frequency_cutoff)
+                logging.debug(f'Succsessfully generated time domain noise')
                 if noise is None:
+                    logging.debug('Setting noise to tmp')
                     noise = tmp
                 else:
+                    logging.debug('Appending tmp to noise')
                     noise.append_zeros(len(tmp))
                     noise.data[-len(tmp):] = tmp.data[:]
+                done_duration += segend - segstart
+            logging.debug(f'Exited while loop with done_duration: {done_duration}')
             ret[det] = noise
         return ret
 
@@ -479,17 +505,22 @@ def get_noise(dataset, start_offset=0, duration=2592000, seed=0,
                                  low_frequency_cutoff=low_frequency_cutoff,
                                  detectors=detectors)
         for seg in segments:
+            logging.debug(f'Now processing segment {seg} of duration {seg[1] - seg[0]} and generating noise for that')
             noise = noi_gen(seg[0], seg[1],
                             generate_duration=generate_duration)
+            logging.debug(f"Finished generating this noise. It is of duration {noise['H1'].duration} and has {len(noise['H1'])} samples.")
             #TODO: Store these segments here
             ret_seg = OverlapSegment(duration=seg[1] - seg[0])
+            for det in detectors:
+                ret_seg.add_timeseries((det, noise[det]))
             if store is None:
-                for det in detectors:
-                    ret_seg.add_timeseries((det, noise[det]))
                 return_segs.add_segment(ret_seg)
             else:
+                logging.debug(f'Trying to store data to file {store}')
                 data = ret_seg.get(shift=False)
+                logging.debug(f'Segment detectors are: {ret_seg.detectors}')
                 for det, ts in zip(ret_seg.detectors, data):
+                    logging.debug(f'Storing time series of duration {ts.duration} for detector {det} at {store}')
                     store_ts(store, det, ts, force=force)
         if store is None:
             return return_segs.get_full_seglist(shift=False)
@@ -614,6 +645,11 @@ def main(doc):
     parser.add_argument('--duration', type=int, default=2592000,
                         help=("The duration of data to generate in "
                               "seconds. Default: 2,592,000"))
+    parser.add_argument('--generate-duration', type=int, default=3600,
+                        help=("When generating noise this amount is "
+                              "generated at a time and the results are "
+                              "concatenated. Lower numbers reduce "
+                              "memory requirements."))
     
     parser.add_argument('--injection-file', type=str,
                         help=("Path to an injection file that should be "
@@ -659,11 +695,11 @@ def main(doc):
     fpath = args.output_foreground_file
     if fpath is not None:
         assert os.path.splitext(fpath)[1] == '.hdf', 'File path must end in `.hdf`'
-        check_file_existence(fpath, args.force)
+        check_file_existence(fpath, args.force, delete=True)
     fpath = args.output_background_file
     if fpath is not None:
         assert os.path.splitext(fpath)[1] == '.hdf', 'File path must end in `.hdf`'
-        check_file_existence(fpath, args.force)
+        check_file_existence(fpath, args.force, delete=True)
     
     #Generate noise background
     logging.info('Getting noise')
@@ -689,6 +725,7 @@ def main(doc):
         cmd += ['--gps-end-time', str(tend)]
         cmd += ['--time-step', str(TIME_STEP)]
         cmd += ['--time-window', str(TIME_WINDOW)]
+        cmd += ['--seed', str(args.seed)]
         if args.output_injection_file is None:
             args.injection_file = os.path.join(base_path(),
                                                f'TMP-{time.time()}.hdf')
