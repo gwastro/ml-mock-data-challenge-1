@@ -1,5 +1,7 @@
 # MLGWSC-1 - Machine Learning Gravitational-Wave Search (Mock Data) Challenge
 
+**Any information contained in this repository as well as the accompanying wiki is preliminary and subject to change.**
+
 ## Introduction
 
 Welcome to the first machine learning gravitational-wave search mock 
@@ -30,7 +32,7 @@ accept submissions which do not make use of this relatively new area of
 research.
 
 If you want to partipate in this mock data challenge, please get in 
-contact with us by sending a mail to [marlin.schaefer@aei.mpg.de](mailto:marlin.schaefer@aei.mpg.de).
+contact with us by sending a mail to [mlgwsc@aei.mpg.de](mailto:mlgwsc@aei.mpg.de).
 We accept registrations up to a maximum number of 30 participating 
 groups until December 31st, 2021. The deadline for the final submission 
 of the algorithm is Feburary 28th, 2022.
@@ -43,7 +45,7 @@ error, we will evaluate the submission on a secret test set that is the
 same for all entries. The performance on this set will only be reported 
 back to the groups on the first circulation of the publication draft. 
 Submissions may be retracted at any point prior to final publication of 
-the manuscript.
+the manuscript. For more information please refer to [this page](https://github.com/gwastro/ml-mock-data-challenge-1/wiki/Submission-Details).
 
 ## Contents of this Repository
 
@@ -56,10 +58,19 @@ Submissions must be able to process a file of HDF5 format that contains
 the raw strain data for 2 detectors. Any required pre-processing is 
 expected to be performed by the submitted code. The output is expected 
 to be another file of HDF5 format which contains times, 
-ranking-statistic like value, and timing accuracies for candidate 
+ranking-statistic like values, and timing accuracies for candidate 
 events. The ranking-statistic like values are numbers where a larger 
 value is supposed to correspond to a larger probability of an 
 astrophysical event to be present. For details on the input- and
-output-format please refer to the Wiki of this repository.
+output-format please refer to the [Wiki](https://github.com/gwastro/ml-mock-data-challenge-1/wiki/Submission-Details#algorithm-inputoutput-format) of this repository.
 
+## Requirements
+To run the code you need to have a working installation of Python 3.7 or
+higher. You will then need to install PyCBC using
+```
+pip install -e git+https://github.com/gwastro/pycbc.git@4a8ec70d5cd86322e1cbec760568ba34f33173d8#egg=pycbc
+```
+This version of the PyCBC github was tested and confirmed to be working.
+Older versions may be missing required functions.
 
+For more detailed installation instructions please refer to [this page](https://github.com/gwastro/ml-mock-data-challenge-1/wiki/Provided-Software#requirements).
