@@ -7,20 +7,22 @@ import h5py
 import os
 import logging
 
-def find_injection_times(fgfile, injfile, padding_start=0, padding_end=0):
+def find_injection_times(fgfiles, injfile, padding_start=0, padding_end=0):
     duration = 0
-    with h5py.File(fgfile, 'r') as fp:
-        det = list(fp.keys())[0]
-        times = []
-        for key in fp[det].keys():
-            ds = fp[f'{det}/{key}']
-            start = ds.attrs['start_time']
-            end = start + len(ds) * ds.attrs['delta_t']
-            duration += end - start
-            start += padding_start
-            end -= padding_end
-            if end > start:
-                times.append([start, end])
+    times = []
+    for fpath in fgfiles:
+        with h5py.File(fpath, 'r') as fp:
+            det = list(fp.keys())[0]
+            
+            for key in fp[det].keys():
+                ds = fp[f'{det}/{key}']
+                start = ds.attrs['start_time']
+                end = start + len(ds) * ds.attrs['delta_t']
+                duration += end - start
+                start += padding_start
+                end -= padding_end
+                if end > start:
+                    times.append([start, end])
     
     with h5py.File(injfile, 'r') as fp:
         injtimes = fp['tc'][()]
@@ -128,16 +130,16 @@ def main(doc):
                         help=("Path to the file containing information "
                               "on the injections. (The file returned by"
                               "`generate_data.py --output-injection-file`"))
-    parser.add_argument('--foreground-events', type=str, required=True,
+    parser.add_argument('--foreground-events', type=str, nargs='+', required=True,
                         help=("Path to the file containing the events "
                               "returned by the search on the foreground "
                               "data set as returned by "
                               "`generate_data.py --output-foreground-file`."))
-    parser.add_argument('--foreground-file', type=str, required=True,
+    parser.add_argument('--foreground-files', type=str, nargs='+', required=True,
                         help=("Path to the file containing the analyzed "
                               "foreground data output by"
                               "`generate_data.py --output-foreground-file`."))
-    parser.add_argument('--background-events', type=str, required=True,
+    parser.add_argument('--background-events', type=str, required=True, nargs='+',
                         help=("Path to the file containing the events "
                               "returned by the search on the background"
                               "data set as returned by "
@@ -169,7 +171,7 @@ def main(doc):
     
     #Find indices contained in foreground file
     logging.info(f'Finding injections contained in data')
-    dur, idxs = find_injection_times(args.foreground_file,
+    dur, idxs = find_injection_times(args.foreground_files,
                                      args.injection_file,
                                      padding_start=30,
                                      padding_end=30)
@@ -183,17 +185,23 @@ def main(doc):
     
     #Read foreground events
     logging.info(f'Reading foreground events from {args.foreground_events}')
-    with h5py.File(args.foreground_events, 'r') as fp:
-        fg_events = np.vstack([fp['time'],
-                               fp['stat'],
-                               fp['var']])
+    fg_events = []
+    for fpath in args.foreground_events:
+        with h5py.File(fpath, 'r') as fp:
+            fg_events.append(np.vstack([fp['time'],
+                                        fp['stat'],
+                                        fp['var']]))
+    fg_events = np.concatenate(fg_events, axis=-1)
     
     #Read background events
     logging.info(f'Reading background events from {args.background_events}')
-    with h5py.File(args.background_events, 'r') as fp:
-        bg_events = np.vstack([fp['time'],
-                               fp['stat'],
-                               fp['var']])
+    bg_events = []
+    for fpath in args.background_events:
+        with h5py.File(fpath, 'r') as fp:
+            bg_events.append(np.vstack([fp['time'],
+                                        fp['stat'],
+                                        fp['var']]))
+    bg_events = np.concatenate(bg_events, axis=-1)
     
     stats = get_stats(fg_events, bg_events, injparams,
                       duration=dur)
