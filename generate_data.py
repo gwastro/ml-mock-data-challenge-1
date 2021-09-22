@@ -769,6 +769,8 @@ def main(doc):
             cmd += ['--output-file', args.injection_file]
             if args.verbose:
                 cmd += ['--verbose']
+            if args.force:
+                cmd += ['--force']
             subprocess.call(cmd)
         elif args.output_injection_file is not None:
             #Copy injection file
@@ -786,7 +788,7 @@ def main(doc):
                         store=args.output_foreground_file,
                         force=args.force)
         
-        with h5py.File(args.output_background_file, 'r') as bgfile
+        with h5py.File(args.output_background_file, 'r') as bgfile:
             with h5py.File(args.output_foreground_file, 'a') as fgfile:
                 attrs = dict(bgfile.attrs)
                 for key, val in attrs.items():
