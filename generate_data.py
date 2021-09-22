@@ -522,6 +522,19 @@ def get_noise(dataset, start_offset=0, duration=2592000, seed=0,
                 for det, ts in zip(ret_seg.detectors, data):
                     logging.debug(f'Storing time series of duration {ts.duration} for detector {det} at {store}')
                     store_ts(store, det, ts, force=force)
+                with h5py.File(store, 'a') as fp:
+                    fp.attrs['dataset'] = dataset
+                    fp.attrs['start_offset'] = start_offset
+                    fp.attrs['duration'] = duration
+                    fp.attrs['seed'] = seed
+                    fp.attrs['low_frequency_cutoff'] = low_frequency_cutoff
+                    fp.attrs['sample_rate'] = sample_rate
+                    fp.attrs['filter_duration'] = filter_duration
+                    fp.attrs['min_segment_duration'] = min_segment_duration
+                    fp.attrs['real_noise_path'] = real_noise_path if real_noise_path is not None else 'None'
+                    fp.attrs['slide_buffer'] = slide_buffer
+                    fp.attrs['segment_path'] = segment_path if segment_path is not None else 'None'
+                    fp.attrs['detectors'] = detectors
         if store is None:
             return return_segs.get_full_seglist(shift=False)
         else:
@@ -537,6 +550,19 @@ def get_noise(dataset, start_offset=0, duration=2592000, seed=0,
         if store is None:
             return seglist.get_full_seglist(shift=True, seed=seed)
         else:
+            with h5py.File(store, 'a') as fp:
+                fp.attrs['dataset'] = dataset
+                fp.attrs['start_offset'] = start_offset
+                fp.attrs['duration'] = duration
+                fp.attrs['seed'] = seed
+                fp.attrs['low_frequency_cutoff'] = low_frequency_cutoff
+                fp.attrs['sample_rate'] = sample_rate
+                fp.attrs['filter_duration'] = filter_duration
+                fp.attrs['min_segment_duration'] = min_segment_duration
+                fp.attrs['real_noise_path'] = real_noise_path if real_noise_path is not None else 'None'
+                fp.attrs['slide_buffer'] = slide_buffer
+                fp.attrs['segment_path'] = segment_path if segment_path is not None else 'None'
+                fp.attrs['detectors'] = detectors
             return
     else:
         raise ValueError(f'Unknown data set {dataset}')
@@ -631,6 +657,8 @@ def main(doc):
     
     parser.add_argument('-s', '--seed', type=int, default=0,
                         help=("The seed to use for data generation. "
+                              "A negative number will result in a "
+                              "random seed for each call."
                               "Default: 0"))
     parser.add_argument('--start-offset', type=int, default=0,
                         help=("An integer specifying the start time offset. "
@@ -702,6 +730,10 @@ def main(doc):
         assert os.path.splitext(fpath)[1] == '.hdf', 'File path must end in `.hdf`'
         check_file_existence(fpath, args.force, delete=True)
     
+    if args.seed < 0:
+        rs = np.random.RandomState()
+        args.seed = rs.randint(0, np.uint32(-1))
+    
     tmp_inj = False
     try:
         #Generate noise background
@@ -753,6 +785,13 @@ def main(doc):
                         padding_end=30,
                         store=args.output_foreground_file,
                         force=args.force)
+        
+        with h5py.File(args.output_background_file, 'r') as bgfile
+            with h5py.File(args.output_foreground_file, 'a') as fgfile:
+                attrs = dict(bgfile.attrs)
+                for key, val in attrs.items():
+                    fgfile.attrs[key] = val
+        
         logging.info(f'Saved foreground to {args.output_foreground_file}')
     except Exception as e:
         if tmp_bg and args.output_background_file is not None:
