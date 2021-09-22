@@ -289,7 +289,8 @@ def get_real_noise(path=None, min_segment_duration=None, start_offset=0,
     segments = restrict_segments(start_offset=start_offset,
                                  duration=duration,
                                  min_segment_duration=min_segment_duration,
-                                 path=segment_path)
+                                 path=segment_path,
+                                 slide_buffer=240)
     
     load_times = {}
     for seg in segments:
@@ -492,12 +493,13 @@ def get_noise(dataset, start_offset=0, duration=2592000, seed=0,
     force : {bool, False}
         Overwrite existing files. (Only used when store is not None)
     """  
-    segments = restrict_segments(start_offset=start_offset,
-                                 duration=duration,
-                                 min_segment_duration=min_segment_duration,
-                                 path=segment_path)
+    
     return_segs = SegmentList()
     if dataset in [1, 2, 3]:
+        segments = restrict_segments(start_offset=start_offset,
+                                     duration=duration,
+                                     min_segment_duration=min_segment_duration,
+                                     path=segment_path)
         noi_gen = NoiseGenerator(dataset,
                                  seed=seed,
                                  filter_duration=filter_duration,
@@ -624,6 +626,12 @@ def make_injections(fpath, injection_file, f_lower=20, padding_start=0,
     if store is None:
         return ret
     else:
+        with h5py.File(store, 'a') as fp:
+            fp.attrs['background-file'] = fpath
+            fp.attrs['injection-file'] = injection_file
+            fp.attrs['f_lower'] = f_lower
+            fp.attrs['padding_start'] = padding_start
+            fp.attrs['padding_end'] = padding_end
         return
 
 def main(doc):
