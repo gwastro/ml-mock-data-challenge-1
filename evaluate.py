@@ -64,7 +64,6 @@ def get_stats(fgevents, bgevents, injparams, duration=None):
     
     tpevents = fgevents.T[tpidxs].T
     fpevents = fgevents.T[fpidxs].T
-    ufpvals = np.unique(fpevents[1])
     
     ret['fg-events'] = fgevents
     ret['found-indices'] = np.arange(len(injtimes))[idxs]
@@ -78,14 +77,13 @@ def get_stats(fgevents, bgevents, injparams, duration=None):
     ret['true-positives'] = tpevents
     ret['false-positives'] = fpevents
     
-    # ret['average-separation'] = np.mean(ret['true-positive-diffs'])
-    
     #Calculate foreground FAR
     logging.info('Calculating foreground FAR')
     noise_stats = fpevents[1].copy()
     noise_stats.sort()
-    fgfar = len(noise_stats) - np.searchsorted(noise_stats, tpevents[1],
-                                               side='left')
+    # fgfar = len(noise_stats) - np.searchsorted(noise_stats, tpevents[1],
+    #                                            side='left')
+    fgfar = len(noise_stats) - np.arange(len(noise_stats)) - 1
     fgfar = fgfar / duration
     ret['fg-far'] = fgfar
     sfaridxs = fgfar.argsort()
@@ -94,8 +92,9 @@ def get_stats(fgevents, bgevents, injparams, duration=None):
     logging.info('Calculating background FAR')
     noise_stats = bgevents[1].copy()
     noise_stats.sort()
-    far = len(noise_stats) - np.searchsorted(noise_stats, tpevents[1],
-                                             side='left')
+    # far = len(noise_stats) - np.searchsorted(noise_stats, tpevents[1],
+    #                                          side='left')
+    far = len(noise_stats) - np.arange(len(noise_stats)) - 1
     far = far / duration
     ret['far'] = far
     
@@ -109,7 +108,9 @@ def get_stats(fgevents, bgevents, injparams, duration=None):
     Ninj = len(dist)
     prefactor = vtot / Ninj
     
-    nfound = len(tp_sort) - np.searchsorted(tp_sort, tpevents[1],
+    # nfound = len(tp_sort) - np.searchsorted(tp_sort, tpevents[1],
+    #                                         side='left')
+    nfound = len(tp_sort) - np.searchsorted(tp_sort, noise_stats,
                                             side='left')
     sample_variance = nfound / Ninj - (nfound / Ninj) ** 2
     vol = prefactor * nfound
@@ -146,7 +147,7 @@ def main(doc):
                               "`generate_data.py --output-background-file`."))
     parser.add_argument('--output-file', type=str, required=True,
                         help=("Path at which to store the output HDF5 "
-                              "file. (Path must end in `.df`)"))
+                              "file. (Path must end in `.hdf`)"))
     # parser.add_argument('--duration', type=float,
     #                     help="Set the duration of analyzed data.")
     
