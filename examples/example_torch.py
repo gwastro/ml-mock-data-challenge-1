@@ -2,7 +2,6 @@
 from argparse import ArgumentParser
 import logging
 import numpy as np
-from scipy.signal import tukey
 import h5py
 import pycbc.waveform, pycbc.noise, pycbc.psd, pycbc.distributions, pycbc.detector
 import os, os.path
@@ -31,20 +30,32 @@ class Dataset(torch.utils.data.Dataset):
 		self.train_device = train_device
 		assert len(self.samples)==len(self.labels)
 		return
+	
 	def __len__(self):
 		return len(self.samples)
+	
 	def __getitem__(self, i):
 		return self.samples[i].to(device=self.train_device), self.labels[i].to(device=self.train_device)
 
-### Function to compute product of elements of an iterable argument
-def product(iterable):
-	prod = 1
-	for num in iterable:
-		prod *= num
-	return prod
-
-### Implement a dataset slicer
-class Slicer:
+class Slicer(object):
+	"""Class that is used to slice and iterate over a single input data
+	file.
+	
+	Arguments
+	---------
+	infile : open file object
+		The open HDF5 file from which the data should be read.
+	step_size : {float, 0.1}
+		The step size (in seconds) for slicing the data.
+	peak_offset : {float, 0.6}
+		The time (in seconds) from the start of each window where the
+		peak is expected to be on average.
+	slice_length : {int, 2048}
+		The length of the output slice in samples.
+	detectors : {None or list of datasets}
+		The datasets that should be read from the infile. If set to None
+		all datasets listed in the attribute `detectors` will be read.
+	"""
 	def __init__(self, infile, step_size=0.1, peak_offset=0.6, slice_length=2048, detectors=None):
 		self.infile = infile
 		self.step_size = step_size		# this is the approximate one passed as an argument, the exact one is defined in the __next__ method
@@ -54,10 +65,12 @@ class Slicer:
 		if self.detectors is None:
 			self.detectors = [self.infile[key] for key in list(self.infile.attrs['detectors'])]
 		return
+	
 	def __iter__(self):
 		self.ds_key_iter = iter(self.detectors[0].keys())
 		self.current_ds_key = None
 		return self
+	
 	def start_next_ds(self):
 		self.current_ds_key = next(self.ds_key_iter)
 		self.current_dss = [det[self.current_ds_key] for det in self.detectors]
@@ -69,6 +82,7 @@ class Slicer:
 		self.index_step_size = int(self.step_size/self.delta_t)		# this is the integer step size
 		self.time_step_size = self.delta_t*self.index_step_size		# this is the exact step size used in the algorithm
 		return
+	
 	def get_next_slice_in_ds(self):
 		if self.current_index+self.slice_length>len(self.current_dss[0]):
 			raise StopIteration
@@ -80,6 +94,7 @@ class Slicer:
 			self.current_index += self.index_step_size
 			self.current_time += self.time_step_size
 			return this_slice, this_time
+	
 	def get_next_slice(self):
 		if self.current_ds_key is None:
 			self.start_next_ds()
@@ -89,6 +104,7 @@ class Slicer:
 			logging.debug("Iterator over dataset starting at integer time %i raised StopIteration." % int(self.current_ds_key))
 			self.start_next_ds()
 			return self.get_next_slice()
+	
 	def __next__(self):
 		return self.get_next_slice()
 
@@ -96,40 +112,69 @@ class TorchSlicer(Slicer, torch.utils.data.IterableDataset):
 	def __init__(self, *args, **kwargs):
 		torch.utils.data.IterableDataset.__init__(self)
 		Slicer.__init__(self, *args, **kwargs)
+	
 	def __next__(self):
 		next_slice, next_time = self.get_next_slice()
 		return torch.from_numpy(next_slice), torch.tensor(next_time)
 
-def get_network():
-	return torch.nn.Sequential(			#  2x2048
-		torch.nn.BatchNorm1d(2),		#  2x2048
-		torch.nn.Conv1d(2, 4, 64),		#  4x1985
-		torch.nn.ELU(),					#  4x1985
-		torch.nn.Conv1d(4, 4, 32),		#  4x1954
-		torch.nn.MaxPool1d(4),			#  4x 489
-		torch.nn.ELU(),					#  4x 489
-		torch.nn.Conv1d(4, 8, 32),		#  8x 458
-		torch.nn.ELU(),					#  8x 458
-		torch.nn.Conv1d(8, 8, 16),		#  8x 443
-		torch.nn.MaxPool1d(3),			#  8x 147
-		torch.nn.ELU(),					#  8x 147
-		torch.nn.Conv1d(8, 16, 16),		# 16x 132
-		torch.nn.ELU(),					# 16x 132
-		torch.nn.Conv1d(16, 16, 16),	# 16x 117
-		torch.nn.MaxPool1d(4),			# 16x  29
-		torch.nn.ELU(),					# 16x  29
-		torch.nn.Flatten(),				#     464
-		torch.nn.Linear(464, 32),		#      32
-		torch.nn.Dropout(p=0.5),		#      32
-		torch.nn.ELU(),					#      32
-		torch.nn.Linear(32, 16),		#      16
-		torch.nn.Dropout(p=0.5),		#      16
-		torch.nn.ELU(),					#      16
-		torch.nn.Linear(16, 2),			#       2
-		torch.nn.Softmax(dim=1)			#       2
-	)
+def get_network(path=None, device='cpu'):
+	"""Return an instance of a network.
+	
+	Arguments
+	---------
+	path : {None or str, None}
+		Path to the network (state-dict) that should be loaded. If None
+		a new network will be initialized.
+	device : {str, 'cpu'}
+		The device on which the network is located.
+	
+	Returns
+	-------
+	network
+	"""
+                                                                # Shapes
+	network = torch.nn.Sequential(torch.nn.BatchNorm1d(2),		#  2x2048
+								  torch.nn.Conv1d(2, 4, 64),	#  4x1985
+								  torch.nn.ELU(),				#  4x1985
+								  torch.nn.Conv1d(4, 4, 32),	#  4x1954
+								  torch.nn.MaxPool1d(4),		#  4x 489
+								  torch.nn.ELU(),				#  4x 489
+								  torch.nn.Conv1d(4, 8, 32),	#  8x 458
+								  torch.nn.ELU(),				#  8x 458
+								  torch.nn.Conv1d(8, 8, 16),	#  8x 443
+								  torch.nn.MaxPool1d(3),		#  8x 147
+								  torch.nn.ELU(),				#  8x 147
+								  torch.nn.Conv1d(8, 16, 16),	# 16x 132
+								  torch.nn.ELU(),				# 16x 132
+								  torch.nn.Conv1d(16, 16, 16),	# 16x 117
+								  torch.nn.MaxPool1d(4),		# 16x  29
+								  torch.nn.ELU(),				# 16x  29
+								  torch.nn.Flatten(),			#     464
+								  torch.nn.Linear(464, 32),		#      32
+								  torch.nn.Dropout(p=0.5),		#      32
+								  torch.nn.ELU(),				#      32
+								  torch.nn.Linear(32, 16),		#      16
+								  torch.nn.Dropout(p=0.5),		#      16
+								  torch.nn.ELU(),				#      16
+								  torch.nn.Linear(16, 2),		#       2
+								  torch.nn.Softmax(dim=1)		#       2
+								 )
+	if path is not None:
+		network.load_state_dict(torch.load(path))
+	network.to(dtype=dtype, device=train_device)
+	return network
 
-def generate_dataset(samples, args):
+def generate_dataset(samples, verbose=0):
+	"""Generate a dataset that can be used for training and/or
+	validation purposes.
+	
+	Arguments
+	---------
+	samples : int
+		The number of training samples to generate.
+	verbose : {int, 0}
+		The verbosity level to use.
+	"""
 	### Initialize the random distributions
 	skylocation_dist = pycbc.distributions.sky_location.UniformSky()
 	np_generator = np.random.default_rng()
@@ -139,7 +184,7 @@ def generate_dataset(samples, args):
 	label_noise = np.array([0., 1.])
 
 	### Generate data
-	if args.verbose>1:
+	if verbose > 1:
 		print_step = 1
 	else:
 		print_step = 1000
@@ -205,95 +250,189 @@ def generate_dataset(samples, args):
 	return samples, labels
 
 
-def train(Network, training_dataset, validation_dataset, args, state_dict_path):
+def train(Network, training_dataset, validation_dataset, output_training,
+          state_dict_path, store_device='cpu', train_device='cpu',
+          test_device='cpu', batch_size=32, learning_rate=5e-5,
+          epochs=100, clip_norm=100):
+	"""Train a network on given data.
+	
+	Arguments
+	---------
+	Network : network as returned by get_network
+		The network to train.
+	training_dataset : (np.array, np.array)
+		The data to use for training. The first entry has to contain the
+		input data, whereas the second entry has to contain the target
+		labels.
+	validation_dataset : (np.array, np.array)
+		The data to use for validation. The first entry has to contain
+		the input data, whereas the second entry has to contain the
+		target labels.
+	output_training : str
+		Path to a directory in which the loss history and the best
+		network weights will be stored.
+	store_device : {str, `cpu`}
+		The device on which the data sets should be stored.
+	train_device : {str, `cpu`}
+		The device on which the network should be trained.
+	test_device : {str, `cpu`}
+		The device on which the network should be evaluated.
+	batch_size : {int, 32}
+		The mini-batch size used for training the network.
+	learning_rate : {float, 5e-5}
+		The learning rate to use with the optimizer.
+	epochs : {int, 100}
+		The number of full passes over the training data.
+	clip_norm : {float, 100}
+		The value at which to clip the gradient to prevent exploding
+		gradients.
+	
+	Returns
+	-------
+	network
+	"""
 	### Set up data loaders as a PyTorch convenience
 	logging.debug("Setting up datasets and data loaders.")
-	TrainDS = Dataset(*training_dataset, store_device=args.store_device, train_device=args.train_device)
-	ValidDS = Dataset(*validation_dataset, store_device=args.store_device, train_device=args.train_device)
-	TrainDL = torch.utils.data.DataLoader(TrainDS, batch_size=args.batch_size, shuffle=True)
+	TrainDS = Dataset(*training_dataset, store_device=store_device, train_device=train_device)
+	ValidDS = Dataset(*validation_dataset, store_device=store_device, train_device=train_device)
+	TrainDL = torch.utils.data.DataLoader(TrainDS, batch_size=batch_size, shuffle=True)
 	ValidDL = torch.utils.data.DataLoader(ValidDS, batch_size=500, shuffle=True)
 
 	### Initialize loss function, optimizer and output file
 	logging.debug("Initializing loss function, optimizer and output file.")
 	loss = torch.nn.BCELoss()
-	opt = torch.optim.Adam(Network.parameters(), lr=args.learning_rate)
-	outfile = open(os.path.join(args.output_training, 'losses.txt'), 'w', buffering=1)
+	opt = torch.optim.Adam(Network.parameters(), lr=learning_rate)
+	with open(os.path.join(output_training, 'losses.txt'), 'w', buffering=1) as outfile:
 
-	### Training loop
-	best_loss = 1.e10 # impossibly bad value
-	logging.info("Starting optimization loop:")
-	logging.info("epoch   training    validation")
-	for epoch in range(1, args.epochs+1):
-		# Training epoch
-		Network.train()
-		training_running_loss = 0.
-		training_batches = 0
-		for training_samples, training_labels in TrainDL:
-			# Optimizer step on a single batch of training data
-			opt.zero_grad()
-			training_output = Network(training_samples)
-			training_loss = loss(training_output, training_labels)
-			training_loss.backward()
-			# Clip gradients to make convergence somewhat easier
-			torch.nn.utils.clip_grad_norm_(Network.parameters(), max_norm=args.clip_norm)
-			# Make the actual optimizer step and save the batch loss
-			opt.step()
-			training_running_loss += training_loss.clone().cpu().item()
-			training_batches += 1
-		# Evaluation on the validation dataset
-		Network.eval()
-		with torch.no_grad():
-			validation_running_loss = 0.
-			validation_batches = 0
-			for validation_samples, validation_labels in ValidDL:
-				# Evaluation of a single validation batch
-				validation_output = Network(validation_samples)
-				validation_loss = loss(validation_output, validation_labels)
-				validation_running_loss += validation_loss.clone().cpu().item()
-				validation_batches += 1
-		# Print information on the training and validation loss in the current epoch and save current network state
-		validation_loss = validation_running_loss/validation_batches
-		output_string = '%04i    %f    %f' % (epoch, training_running_loss/training_batches, validation_loss)
-		logging.info(output_string)
-		outfile.write(output_string + '\n')
-		# Save 
-		if validation_loss<best_loss:
-			torch.save(Network.state_dict(), state_dict_path)
-			best_loss = validation_loss
+		### Training loop
+		best_loss = 1.e10 # impossibly bad value
+		logging.info("Starting optimization loop:")
+		logging.info("epoch   training    validation")
+		for epoch in range(1, epochs+1):
+			# Training epoch
+			Network.train()
+			training_running_loss = 0.
+			training_batches = 0
+			for training_samples, training_labels in TrainDL:
+				# Optimizer step on a single batch of training data
+				opt.zero_grad()
+				training_output = Network(training_samples)
+				training_loss = loss(training_output, training_labels)
+				training_loss.backward()
+				# Clip gradients to make convergence somewhat easier
+				torch.nn.utils.clip_grad_norm_(Network.parameters(), max_norm=clip_norm)
+				# Make the actual optimizer step and save the batch loss
+				opt.step()
+				training_running_loss += training_loss.clone().cpu().item()
+				training_batches += 1
+			# Evaluation on the validation dataset
+			Network.eval()
+			with torch.no_grad():
+				validation_running_loss = 0.
+				validation_batches = 0
+				for validation_samples, validation_labels in ValidDL:
+					# Evaluation of a single validation batch
+					validation_output = Network(validation_samples)
+					validation_loss = loss(validation_output, validation_labels)
+					validation_running_loss += validation_loss.clone().cpu().item()
+					validation_batches += 1
+			# Print information on the training and validation loss in the current epoch and save current network state
+			validation_loss = validation_running_loss/validation_batches
+			output_string = '%04i    %f    %f' % (epoch, training_running_loss/training_batches, validation_loss)
+			logging.info(output_string)
+			outfile.write(output_string + '\n')
+			# Save 
+			if validation_loss<best_loss:
+				torch.save(Network.state_dict(), state_dict_path)
+				best_loss = validation_loss
 
-	logging.debug("Training complete, closing file.")
-	outfile.close()
-
+		logging.debug("Training complete, closing file.")
+	
+	Network.load_state_dict(torch.load(state_dict_path))
+	Network.to(dtype=dtype, device=test_device)
 	return Network
 
-def get_triggers(Network, slicer, args):
-	triggers = []
-	data_loader = torch.utils.data.DataLoader(slicer, batch_size=512, shuffle=False)
-	### Gradually apply network to all samples and if output exceeds the trigger threshold, save the time and the output value
-	logging.info("Starting iteration over dataset.")
-	if args.verbose>1:
-		print_step = 1
-	else:
-		print_step = 100000
-	to_print = print_step
-	processed = 0
-	for slice_batch, slice_times in data_loader:
-		with torch.no_grad():
-			output_values = Network(slice_batch.to(dtype=dtype, device=args.device))[:, 0]
-			trigger_bools = torch.gt(output_values, args.trigger_threshold)
-			for slice_time, trigger_bool, output_value in zip(slice_times, trigger_bools, output_values):
-				if trigger_bool.clone().cpu().item():
-					triggers.append([slice_time.clone().cpu().item(), output_value.clone().cpu().item()])
-		processed += len(slice_times)
-		if processed>=to_print:
-			logging.info("Processed %i slices." % processed)
-			to_print += print_step
-	logging.info("Network evaluation finished with %i slices." % processed)
-	logging.info("A total of %i slices have exceeded the threshold of %f." % (len(triggers), args.trigger_threshold))
+def get_triggers(Network, inputfile, step_size=0.1,
+                 trigger_threshold=0.2, device='cpu', verbose=0):
+	"""Use a network to generate a list of triggers, where the network
+	outputs a value above a given threshold.
+	
+	Arguments
+	---------
+	Network : network as returned by get_network
+		The network to use during the evaluation.
+	inputfile : str
+		Path to the input data file.
+	step_size : {float, 0.1}
+		The step size (in seconds) to use for slicing the data.
+	trigger_threshold : {float, 0.2}
+		The value to use as a threshold on the network output to create
+		triggers.
+	device : {str, `cpu`}
+		The device on which the calculations are carried out.
+	verbose : {int, 0}
+		The verbosity level to use.
+	
+	Returns
+	-------
+	triggers:
+		A list of of triggers. A trigger is a list of length two, where
+		the first entry represents the trigger time and the second value
+		represents the accompanying output value from the network.
+	"""
+	with h5py.File(inputfile, 'r') as infile:
+		slicer = TorchSlicer(infile, step_size=step_size)
+		triggers = []
+		data_loader = torch.utils.data.DataLoader(slicer,
+		                                          batch_size=512,
+		                                          shuffle=False)
+		### Gradually apply network to all samples and if output exceeds the trigger threshold, save the time and the output value
+		logging.info("Starting iteration over dataset.")
+		if verbose>1:
+			print_step = 1
+		else:
+			print_step = 100000
+		to_print = print_step
+		processed = 0
+		for slice_batch, slice_times in data_loader:
+			with torch.no_grad():
+				output_values = Network(slice_batch.to(dtype=dtype, device=device))[:, 0]
+				trigger_bools = torch.gt(output_values, trigger_threshold)
+				for slice_time, trigger_bool, output_value in zip(slice_times, trigger_bools, output_values):
+					if trigger_bool.clone().cpu().item():
+						triggers.append([slice_time.clone().cpu().item(), output_value.clone().cpu().item()])
+			processed += len(slice_times)
+			if processed>=to_print:
+				logging.info("Processed %i slices." % processed)
+				to_print += print_step
+		logging.info("Network evaluation finished with %i slices." % processed)
+		logging.info("A total of %i slices have exceeded the threshold of %f." % (len(triggers), trigger_threshold))
 	return triggers
 
-def get_clusters(triggers, args):
-	### Cluster the triggers into candidate detections
+def get_clusters(triggers, cluster_threshold=0.35):
+	"""Cluster a set of triggers into candidate detections.
+	
+	Arguments
+	---------
+	triggers : list of triggers
+		A list of triggers.  A trigger is a list of length two, where
+		the first entry represents the trigger time and the second value
+		represents the accompanying output value from the network.
+	cluster_threshold : {float, 0.35}
+		Cluster triggers together which are no more than this amount of
+		time away from the boundaries of the corresponding cluster.
+	
+	Returns
+	cluster_times :
+		A numpy array containing the single times associated to each
+		cluster.
+	cluster_values :
+		A numpy array containing the trigger values at the corresponing
+		cluster_times.
+	cluster_timevars :
+		The timing certainty for each cluster. Injections must be within
+		the given value for the cluster to be counted as true positive.
+	"""
 	clusters = []
 	for trigger in triggers:
 		new_trigger_time = trigger[0]
@@ -302,7 +441,7 @@ def get_clusters(triggers, args):
 		else:
 			last_cluster = clusters[-1]
 			last_trigger_time = last_cluster[-1][0]
-			start_new_cluster = (new_trigger_time - last_trigger_time)>args.cluster_threshold
+			start_new_cluster = (new_trigger_time - last_trigger_time)>cluster_threshold
 		if start_new_cluster:
 			clusters.append([trigger])
 		else:
@@ -342,7 +481,7 @@ def main():
 
 	testing_group.add_argument('inputfile', type=str, help="The path to the input data file.")
 	testing_group.add_argument('outputfile', type=str, help="The path where to store the triggers. The file must not exist.")
-	testing_group.add_argument('-s', '--state-dict', type=str, default=None, help="The path to the state dictionary containing the network weights. If the --train option is present, the trained weights are used instead. Default: %s." % default_state_dict_fname)
+	testing_group.add_argument('-s', '--state-dict', type=str, help="The path to the state dictionary containing the network weights. If the --train option is present, the trained weights are used instead. Default: %s." % default_state_dict_fname)
 	testing_group.add_argument('-t', '--trigger-threshold', type=float, default=0.2, help="The threshold to mark triggers. Default: 0.2")
 	testing_group.add_argument('--step-size', type=float, default=0.1, help="The sliding window step size between analyzed samples. Default: 0.1")
 	testing_group.add_argument('--cluster-threshold', type=float, default=0.35, help="The farthest in time that two slices can be to form a cluster. Default: 0.35")
@@ -352,7 +491,7 @@ def main():
 	training_group.add_argument('-o', '--output-training', type=str, help="Path to the directory where the outputs will be stored. The directory must exist and be empty.")
 	training_group.add_argument('--training-samples', type=int, nargs=2, default=[10000, 10000], help="Numbers of training samples as 'injections' 'pure noise samples'. Default: 10000 10000")
 	training_group.add_argument('--validation-samples', type=int, nargs=2, default=[2000, 2000], help="Numbers of validation samples as 'injections' 'pure noise samples'. Default: 2000 2000")
-	training_group.add_argument('--learning-rate', type=float, default=0.00005, help="Learning rate of the optimizer. Default: 0.00005")
+	training_group.add_argument('--learning-rate', type=float, default=5e-5, help="Learning rate of the optimizer. Default: 0.00005")
 	training_group.add_argument('--epochs', type=int, default=100, help="Number of training epochs. Default: 100")
 	training_group.add_argument('--batch-size', type=int, default=32, help="Batch size of the training algorithm. Default: 32")
 	training_group.add_argument('--clip-norm', type=float, default=100., help="Gradient clipping norm to stabilize the training. Default: 100.")
@@ -376,34 +515,30 @@ def main():
 
 	### Initialize network
 	logging.debug("Initializing network.")
-	Network = get_network()
-	Network.to(dtype=dtype, device=args.train_device)
+	Network = get_network(path=args.state_dict)
 
 	if args.train:
-		TrainDS = generate_dataset(args.training_samples, args)
-		ValidDS = generate_dataset(args.validation_samples, args)
+		TrainDS = generate_dataset(args.training_samples, args.verbose)
+		ValidDS = generate_dataset(args.validation_samples, args.verbose)
 		state_dict_path = os.path.join(args.output_training, 'state_dict.pt')
-		train(Network, TrainDS, ValidDS, args, state_dict_path)
-	else:
-		state_dict_path = args.state_dict
+		Network = train(Network, TrainDS, ValidDS, args, state_dict_path)
+		
+	triggers = get_triggers(Network,
+	                        args.inputfile,
+	                        step_size=args.step_size,
+	                        trigger_threshold=args.trigger_threshold,
+	                        device=args.device,
+	                        verbose=args.verbose)
 
-	### Load the right set of weights
-	Network.load_state_dict(torch.load(state_dict_path))
-	Network.to(dtype=dtype, device=args.device)
-
-	with h5py.File(args.inputfile, 'r') as infile:
-		slicer = TorchSlicer(infile, step_size=args.step_size)
-		triggers = get_triggers(Network, slicer, args)
-
-	cluster_times, cluster_values, cluster_timevars = get_clusters(triggers, args)
+	time, stat, var = get_clusters(triggers, args.cluster_threshold)
 
 	with h5py.File(args.outputfile, 'w') as outfile:
 		### Save clustered values to the output file and close it
 		logging.debug("Saving clustered triggers into %s." % args.outputfile)
 
-		outfile.create_dataset('time', data=cluster_times)
-		outfile.create_dataset('stat', data=cluster_values)
-		outfile.create_dataset('var', data=cluster_timevars)
+		outfile.create_dataset('time', data=time)
+		outfile.create_dataset('stat', data=stat)
+		outfile.create_dataset('var', data=var)
 
 		logging.debug("Triggers saved, closing file.")
 
