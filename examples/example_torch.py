@@ -194,7 +194,7 @@ def generate_dataset(samples, verbose=False):
 	samples : int
 		The number of training samples to generate.
 	verbose : {bool, False}
-		The verbosity level to use.
+		Print update messages.
 	"""
 	### Create the detectors
 	detectors_abbr = ('H1', 'L1')
@@ -288,7 +288,8 @@ def generate_dataset(samples, verbose=False):
 
 def train(Network, training_dataset, validation_dataset, output_training,
           weights_path, store_device='cpu', train_device='cpu',
-          batch_size=32, learning_rate=5e-5, epochs=100, clip_norm=100):
+          batch_size=32, learning_rate=5e-5, epochs=100, clip_norm=100,
+          verbose=False):
 	"""Train a network on given data.
 	
 	Arguments
@@ -321,6 +322,8 @@ def train(Network, training_dataset, validation_dataset, output_training,
 	clip_norm : {float, 100}
 		The value at which to clip the gradient to prevent exploding
 		gradients.
+	verbose : {bool, False}
+		Print update messages.
 	
 	Returns
 	-------
@@ -341,14 +344,16 @@ def train(Network, training_dataset, validation_dataset, output_training,
 
 		### Training loop
 		best_loss = 1.e10 # impossibly bad value
-		logging.info("Starting optimization loop:")
-		logging.info("epoch   training    validation")
-		for epoch in range(1, epochs+1):
+		iterable1 = range(1, epochs+1)
+		iterable1 = tqdm(iterable1, desc="Optimizing network") if verbose else iterable1
+		for epoch in iterable1:
 			# Training epoch
 			Network.train()
 			training_running_loss = 0.
 			training_batches = 0
-			for training_samples, training_labels in TrainDL:
+			iterable2 = TrainDL
+			iterable2 = tqdm(iterable2, desc="Iterating over training dataset", leave=False) if verbose else iterable2
+			for training_samples, training_labels in iterable2:
 				# Optimizer step on a single batch of training data
 				opt.zero_grad()
 				training_output = Network(training_samples)
@@ -365,7 +370,9 @@ def train(Network, training_dataset, validation_dataset, output_training,
 			with torch.no_grad():
 				validation_running_loss = 0.
 				validation_batches = 0
-				for validation_samples, validation_labels in ValidDL:
+				iterable2 = ValidDL
+				iterable2 = tqdm(iterable2, desc="Computing validation loss", leave=False) if verbose else iterable2
+				for validation_samples, validation_labels in iterable2:
 					# Evaluation of a single validation batch
 					validation_output = Network(validation_samples)
 					validation_loss = loss(validation_output, validation_labels)
@@ -374,14 +381,14 @@ def train(Network, training_dataset, validation_dataset, output_training,
 			# Print information on the training and validation loss in the current epoch and save current network state
 			validation_loss = validation_running_loss/validation_batches
 			output_string = '%04i    %f    %f' % (epoch, training_running_loss/training_batches, validation_loss)
-			logging.info(output_string)
 			outfile.write(output_string + '\n')
 			# Save 
 			if validation_loss<best_loss:
 				torch.save(Network.state_dict(), weights_path)
 				best_loss = validation_loss
 
-		logging.debug("Training complete, closing file.")
+		logging.debug(("Training complete with best validation loss "
+						"%f, closing losses output file." % best_loss))
 	
 	Network.load_state_dict(torch.load(weights_path))
 	return Network
@@ -405,7 +412,7 @@ def get_triggers(Network, inputfile, step_size=0.1,
 	device : {str, `cpu`}
 		The device on which the calculations are carried out.
 	verbose : {bool, False}
-		The verbosity level to use.
+		Print update messages.
 	
 	Returns
 	-------
@@ -422,8 +429,7 @@ def get_triggers(Network, inputfile, step_size=0.1,
 		                                          batch_size=512,
 		                                          shuffle=False)
 		### Gradually apply network to all samples and if output exceeds the trigger threshold, save the time and the output value
-		logging.info("Starting iteration over dataset.")
-		iterable = tqdm(data_loader) if verbose else data_loader
+		iterable = tqdm(data_loader, desc="Iterating over dataset") if verbose else data_loader
 		for slice_batch, slice_times in iterable:
 			with torch.no_grad():
 				output_values = Network(slice_batch.to(dtype=dtype, device=device))[:, 0]
@@ -551,7 +557,7 @@ def main():
 		Network = train(Network, TrainDS, ValidDS, args.output_training, weights_path,
                         store_device=args.store_device, train_device=args.train_device,
                         batch_size=args.batch_size, learning_rate=args.learning_rate,
-                        epochs=args.epochs, clip_norm=args.clip_norm)
+                        epochs=args.epochs, clip_norm=args.clip_norm, verbose=args.verbose)
 		
 	triggers = get_triggers(Network,
 	                        args.inputfile,
