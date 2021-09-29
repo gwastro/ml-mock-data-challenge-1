@@ -161,7 +161,7 @@ def get_network(path=None, device='cpu'):
 								 )
 	if path is not None:
 		network.load_state_dict(torch.load(path))
-	network.to(dtype=dtype, device=train_device)
+	network.to(dtype=dtype, device=device)
 	return network
 
 def generate_dataset(samples, verbose=0):
@@ -252,8 +252,7 @@ def generate_dataset(samples, verbose=0):
 
 def train(Network, training_dataset, validation_dataset, output_training,
           state_dict_path, store_device='cpu', train_device='cpu',
-          test_device='cpu', batch_size=32, learning_rate=5e-5,
-          epochs=100, clip_norm=100):
+          batch_size=32, learning_rate=5e-5, epochs=100, clip_norm=100):
 	"""Train a network on given data.
 	
 	Arguments
@@ -275,8 +274,6 @@ def train(Network, training_dataset, validation_dataset, output_training,
 		The device on which the data sets should be stored.
 	train_device : {str, `cpu`}
 		The device on which the network should be trained.
-	test_device : {str, `cpu`}
-		The device on which the network should be evaluated.
 	batch_size : {int, 32}
 		The mini-batch size used for training the network.
 	learning_rate : {float, 5e-5}
@@ -349,7 +346,6 @@ def train(Network, training_dataset, validation_dataset, output_training,
 		logging.debug("Training complete, closing file.")
 	
 	Network.load_state_dict(torch.load(state_dict_path))
-	Network.to(dtype=dtype, device=test_device)
 	return Network
 
 def get_triggers(Network, inputfile, step_size=0.1,
@@ -380,6 +376,7 @@ def get_triggers(Network, inputfile, step_size=0.1,
 		the first entry represents the trigger time and the second value
 		represents the accompanying output value from the network.
 	"""
+	Network.to(dtype=dtype, device=device)
 	with h5py.File(inputfile, 'r') as infile:
 		slicer = TorchSlicer(infile, step_size=step_size)
 		triggers = []
@@ -391,7 +388,7 @@ def get_triggers(Network, inputfile, step_size=0.1,
 		if verbose>1:
 			print_step = 1
 		else:
-			print_step = 100000
+			print_step = 1000
 		to_print = print_step
 		processed = 0
 		for slice_batch, slice_times in data_loader:
@@ -515,13 +512,16 @@ def main():
 
 	### Initialize network
 	logging.debug("Initializing network.")
-	Network = get_network(path=args.state_dict)
+	Network = get_network(path=args.state_dict, device=args.train_device)
 
 	if args.train:
 		TrainDS = generate_dataset(args.training_samples, args.verbose)
 		ValidDS = generate_dataset(args.validation_samples, args.verbose)
 		state_dict_path = os.path.join(args.output_training, 'state_dict.pt')
-		Network = train(Network, TrainDS, ValidDS, args, state_dict_path)
+		Network = train(Network, TrainDS, ValidDS, args.output_training, state_dict_path,
+                        store_device=args.store_device, train_device=args.train_device,
+                        batch_size=args.batch_size, learning_rate=args.learning_rate,
+                        epochs=args.epochs, clip_norm=args.clip_norm)
 		
 	triggers = get_triggers(Network,
 	                        args.inputfile,
