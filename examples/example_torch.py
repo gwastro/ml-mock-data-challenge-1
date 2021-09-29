@@ -3,30 +3,29 @@ from argparse import ArgumentParser
 import logging
 import numpy as np
 import h5py
-import pycbc.waveform, pycbc.noise, pycbc.psd, pycbc.distributions, pycbc.detector
+import pycbc.waveform, pycbc.noise, pycbc.psd
+import pycbc.distributions, pycbc.detector
 import os, os.path
+from tqdm import tqdm
 
 import torch
 
-### Set default state dictionary filename
-default_state_dict_fname = 'state_dict.pt'
+### Set default weights filename
+default_weights_fname = 'weights.pt'
 
 ### Set data type to be used
 dtype = torch.float32
 
-### Create the detectors
-detectors_abbr = ('H1', 'L1')
-detectors = [pycbc.detector.Detector(det_abbr) for det_abbr in detectors_abbr]
-
-### Create the power spectral densities of the respective detectors
-psds = [pycbc.psd.analytical.aLIGOZeroDetHighPower(1025, 1., 18.) for _ in range(len(detectors))]
 
 ### Basic dataset class for easy PyTorch loading
 class Dataset(torch.utils.data.Dataset):
-	def __init__(self, samples, labels, store_device=torch.device('cpu'), train_device=torch.device('cpu')):
+	def __init__(self, samples, labels,
+				store_device='cpu', train_device='cpu'):
 		torch.utils.data.Dataset.__init__(self)
-		self.samples = torch.from_numpy(samples).to(dtype=dtype, device=store_device)
-		self.labels = torch.from_numpy(labels).to(dtype=dtype, device=store_device)
+		self.samples = torch.from_numpy(samples)
+		self.labels = torch.from_numpy(labels)
+		self.samples = self.samples.to(dtype=dtype,device=store_device)
+		self.labels = self.labels.to(dtype=dtype,device=store_device)
 		self.train_device = train_device
 		assert len(self.samples)==len(self.labels)
 		return
@@ -35,7 +34,9 @@ class Dataset(torch.utils.data.Dataset):
 		return len(self.samples)
 	
 	def __getitem__(self, i):
-		return self.samples[i].to(device=self.train_device), self.labels[i].to(device=self.train_device)
+		sample = self.samples[i].to(device=self.train_device)
+		label = self.labels[i].to(device=self.train_device)
+		return sample, label
 
 class Slicer(object):
 	"""Class that is used to slice and iterate over a single input data
@@ -56,15 +57,28 @@ class Slicer(object):
 		The datasets that should be read from the infile. If set to None
 		all datasets listed in the attribute `detectors` will be read.
 	"""
-	def __init__(self, infile, step_size=0.1, peak_offset=0.6, slice_length=2048, detectors=None):
+	def __init__(self, infile, step_size=0.1, peak_offset=0.6,
+							slice_length=2048, detectors=None):
 		self.infile = infile
-		self.step_size = step_size		# this is the approximate one passed as an argument, the exact one is defined in the __next__ method
+		self.step_size = step_size		# approximate step
 		self.peak_offset = peak_offset
 		self.slice_length = slice_length
 		self.detectors = detectors
 		if self.detectors is None:
-			self.detectors = [self.infile[key] for key in list(self.infile.attrs['detectors'])]
+			self.detectors = []
+			for key in list(self.infile.attrs['detectors']):
+				self.detectors.append(self.infile[key])
 		return
+
+	def __len__(self):
+		slices = 0
+		for key in self.detectors[0].keys():
+			ds = self.detectors[0][key]
+			full_slice_length = 512 + self.slice_length
+			index_step_size = int(self.step_size/ds.attrs['delta_t'])
+			sli_num = 1+((len(ds)-full_slice_length)//index_step_size)
+			slices += max((0, sli_num))
+		return slices
 	
 	def __iter__(self):
 		self.ds_key_iter = iter(self.detectors[0].keys())
@@ -73,24 +87,29 @@ class Slicer(object):
 	
 	def start_next_ds(self):
 		self.current_ds_key = next(self.ds_key_iter)
-		self.current_dss = [det[self.current_ds_key] for det in self.detectors]
+		self.current_dss = []
+		for det in self.detectors:
+			self.current_dss.append(det[self.current_ds_key])
 		self.current_index = 0
 		self.current_time = self.current_dss[0].attrs['start_time']
 		self.delta_t = self.current_dss[0].attrs['delta_t']
 		for ds in self.current_dss:
-			assert (ds.attrs['start_time']==self.current_time) and (ds.attrs['delta_t']==self.delta_t)
-		self.index_step_size = int(self.step_size/self.delta_t)		# this is the integer step size
-		self.time_step_size = self.delta_t*self.index_step_size		# this is the exact step size used in the algorithm
+			assert (ds.attrs['start_time']==self.current_time)
+			assert (ds.attrs['delta_t']==self.delta_t)
+		# Exact integer step size
+		self.index_step_size = int(self.step_size/self.delta_t)
+		# Exact step size
+		self.time_step_size = self.delta_t*self.index_step_size
 		return
 	
 	def get_next_slice_in_ds(self):
-		if self.current_index+self.slice_length>len(self.current_dss[0]):
+		if self.current_index+self.slice_length+512>len(self.current_dss[0]):
 			raise StopIteration
 		else:
-			this_slice = [pycbc.types.TimeSeries(ds[self.current_index:self.current_index+self.slice_length], delta_t=self.delta_t) for ds in self.current_dss]
-			this_slice = [strain.whiten(0.5, 0.25, remove_corrupted=False, low_frequency_cutoff=18.) for strain in this_slice]
+			this_slice = [pycbc.types.TimeSeries(ds[self.current_index:self.current_index+self.slice_length+512], delta_t=self.delta_t) for ds in self.current_dss]
+			this_slice = [strain.whiten(0.5, 0.25, remove_corrupted=True, low_frequency_cutoff=18.) for strain in this_slice]
 			this_slice = np.stack([strain.numpy() for strain in this_slice], axis=0)
-			this_time = self.current_time + self.peak_offset
+			this_time = self.current_time + self.peak_offset + 0.125
 			self.current_index += self.index_step_size
 			self.current_time += self.time_step_size
 			return this_slice, this_time
@@ -101,7 +120,8 @@ class Slicer(object):
 		try:
 			return self.get_next_slice_in_ds()
 		except StopIteration:
-			logging.debug("Iterator over dataset starting at integer time %i raised StopIteration." % int(self.current_ds_key))
+			logging.debug(("Iterator over dataset starting at inttime "
+				"%i raised StopIteration." % int(self.current_ds_key)))
 			self.start_next_ds()
 			return self.get_next_slice()
 	
@@ -123,7 +143,7 @@ def get_network(path=None, device='cpu'):
 	Arguments
 	---------
 	path : {None or str, None}
-		Path to the network (state-dict) that should be loaded. If None
+		Path to the network (weights) that should be loaded. If None
 		a new network will be initialized.
 	device : {str, 'cpu'}
 		The device on which the network is located.
@@ -132,39 +152,40 @@ def get_network(path=None, device='cpu'):
 	-------
 	network
 	"""
-                                                                # Shapes
-	network = torch.nn.Sequential(torch.nn.BatchNorm1d(2),		#  2x2048
-								  torch.nn.Conv1d(2, 4, 64),	#  4x1985
-								  torch.nn.ELU(),				#  4x1985
-								  torch.nn.Conv1d(4, 4, 32),	#  4x1954
-								  torch.nn.MaxPool1d(4),		#  4x 489
-								  torch.nn.ELU(),				#  4x 489
-								  torch.nn.Conv1d(4, 8, 32),	#  8x 458
-								  torch.nn.ELU(),				#  8x 458
-								  torch.nn.Conv1d(8, 8, 16),	#  8x 443
-								  torch.nn.MaxPool1d(3),		#  8x 147
-								  torch.nn.ELU(),				#  8x 147
-								  torch.nn.Conv1d(8, 16, 16),	# 16x 132
-								  torch.nn.ELU(),				# 16x 132
-								  torch.nn.Conv1d(16, 16, 16),	# 16x 117
-								  torch.nn.MaxPool1d(4),		# 16x  29
-								  torch.nn.ELU(),				# 16x  29
-								  torch.nn.Flatten(),			#     464
-								  torch.nn.Linear(464, 32),		#      32
-								  torch.nn.Dropout(p=0.5),		#      32
-								  torch.nn.ELU(),				#      32
-								  torch.nn.Linear(32, 16),		#      16
-								  torch.nn.Dropout(p=0.5),		#      16
-								  torch.nn.ELU(),				#      16
-								  torch.nn.Linear(16, 2),		#       2
-								  torch.nn.Softmax(dim=1)		#       2
-								 )
+
+	network = torch.nn.Sequential(		# Shapes
+		torch.nn.BatchNorm1d(2),		#  2x2048
+		torch.nn.Conv1d(2, 4, 64),		#  4x1985
+		torch.nn.ELU(),					#  4x1985
+		torch.nn.Conv1d(4, 4, 32),		#  4x1954
+		torch.nn.MaxPool1d(4),			#  4x 489
+		torch.nn.ELU(),					#  4x 489
+		torch.nn.Conv1d(4, 8, 32),		#  8x 458
+		torch.nn.ELU(),					#  8x 458
+		torch.nn.Conv1d(8, 8, 16),		#  8x 443
+		torch.nn.MaxPool1d(3),			#  8x 147
+		torch.nn.ELU(),					#  8x 147
+		torch.nn.Conv1d(8, 16, 16),		# 16x 132
+		torch.nn.ELU(),					# 16x 132
+		torch.nn.Conv1d(16, 16, 16),	# 16x 117
+		torch.nn.MaxPool1d(4),			# 16x  29
+		torch.nn.ELU(),					# 16x  29
+		torch.nn.Flatten(),				#     464
+		torch.nn.Linear(464, 32),		#      32
+		torch.nn.Dropout(p=0.5),		#      32
+		torch.nn.ELU(),					#      32
+		torch.nn.Linear(32, 16),		#      16
+		torch.nn.Dropout(p=0.5),		#      16
+		torch.nn.ELU(),					#      16
+		torch.nn.Linear(16, 2),			#       2
+		torch.nn.Softmax(dim=1)			#       2
+		)
 	if path is not None:
 		network.load_state_dict(torch.load(path))
 	network.to(dtype=dtype, device=device)
 	return network
 
-def generate_dataset(samples, verbose=0):
+def generate_dataset(samples, verbose=False):
 	"""Generate a dataset that can be used for training and/or
 	validation purposes.
 	
@@ -172,69 +193,86 @@ def generate_dataset(samples, verbose=0):
 	---------
 	samples : int
 		The number of training samples to generate.
-	verbose : {int, 0}
+	verbose : {bool, False}
 		The verbosity level to use.
 	"""
+	### Create the detectors
+	detectors_abbr = ('H1', 'L1')
+	detectors = []
+	for det_abbr in detectors_abbr:
+		detectors.append(pycbc.detector.Detector(det_abbr))
+
+	### Create the power spectral densities of the respective detectors
+	psd_fun = pycbc.psd.analytical.aLIGOZeroDetHighPower
+	psds = [psd_fun(1281, 4./5., 18.) for _ in range(len(detectors))]
+
 	### Initialize the random distributions
 	skylocation_dist = pycbc.distributions.sky_location.UniformSky()
-	np_generator = np.random.default_rng()
+	np_gen = np.random.default_rng()
 
 	### Create labels
 	label_wave = np.array([1., 0.])
 	label_noise = np.array([0., 1.])
 
 	### Generate data
-	if verbose > 1:
-		print_step = 1
-	else:
-		print_step = 1000
 	datasets = []
 	num_waveforms, num_noises = samples
-	logging.info("Generating dataset with %i injections and %i pure noise samples" % (num_waveforms, num_noises))
+	logging.info(("Generating dataset with %i injections and %i pure "
+				"noise samples") % (num_waveforms, num_noises))
 	samples = []
 	labels = []
-	for i in range(num_waveforms+num_noises):
+	iterable = range(num_waveforms+num_noises)
+	iterable = tqdm(iterable) if verbose else iterable
+	for i in iterable:
 		is_waveform = i<num_waveforms
 		# Generate noise
-		noise = np.stack([pycbc.noise.gaussian.frequency_noise_from_psd(psd).to_timeseries().numpy() for psd in psds], axis=0)
+		noise_fun = pycbc.noise.gaussian.frequency_noise_from_psd
+		noise = [noise_fun(psd).to_timeseries().numpy() for psd in psds]
+		noise = np.stack(noise, axis=0)
 		# If in the first part of the dataset, generate waveform
 		if is_waveform:
 			# Generate source parameters
-			waveform_kwargs = {'approximant': 'IMRPhenomD', 'delta_t': 1./2048., 'f_lower': 18.}
-			masses = np_generator.uniform(10., 50., 2)
-			waveform_kwargs['mass1'], waveform_kwargs['mass2'] = max(masses), min(masses)
-			angles = np_generator.uniform(0., 2*np.pi, 3)
+			waveform_kwargs = {'delta_t': 1./2048., 'f_lower': 18.}
+			waveform_kwargs['approximant'] = 'IMRPhenomD'
+			masses = np_gen.uniform(10., 50., 2)
+			waveform_kwargs['mass1'] = max(masses)
+			waveform_kwargs['mass2'] = min(masses)
+			angles = np_gen.uniform(0., 2*np.pi, 3)
 			waveform_kwargs['coa_phase'] = angles[0]
 			waveform_kwargs['inclination'] = angles[1]
 			declination, right_ascension = skylocation_dist.rvs()[0]
 			pol_angle = angles[2]
-			injection_time = np_generator.uniform(1238166018, 1253977218)	# Take the injection time randomly in the LIGO O3a era
+			# Take the injection time randomly in the LIGO O3a era
+			injection_time = np_gen.uniform(1238166018, 1253977218)
 			# Generate the full waveform
-			h_plus, h_cross = pycbc.waveform.get_td_waveform(**waveform_kwargs)
+			waveform = pycbc.waveform.get_td_waveform(**waveform_kwargs)
+			h_plus, h_cross = waveform
 			# Properly time and project the waveform
-			h_plus.start_time = h_cross.start_time = injection_time + h_plus.get_sample_times()[0]
-			h_plus.append_zeros(2048)
-			h_cross.append_zeros(2048)
+			start_time = injection_time + h_plus.get_sample_times()[0]
+			h_plus.start_time = start_time
+			h_cross.start_time = start_time
+			h_plus.append_zeros(2560)
+			h_cross.append_zeros(2560)
 			strains = [det.project_wave(h_plus, h_cross, right_ascension, declination, pol_angle) for det in detectors]
 			# Place merger randomly within the window between 0.5 s and 0.7 s of the time series and form the PyTorch sample
-			time_placement = np_generator.uniform(0.5, 0.7)
+			time_placement = np_gen.uniform(0.5, 0.7)+0.125
 			time_interval = injection_time-time_placement
-			time_interval = (time_interval, time_interval+0.999)	# 0.999 to not get a too long strain
+			time_interval = (time_interval, time_interval+1.249)	# 1.499 to not get a too long strain
 			strains = [strain.time_slice(*time_interval) for strain in strains]
 			for strain in strains:
-				to_append = 2048 - len(strain)
+				to_append = 2560 - len(strain)
 				if to_append>0:
 					strain.append_zeros(to_append)
 			# Compute network SNR, rescale to generated target network SNR and inject into noise
 			network_snr = np.sqrt(sum([pycbc.filter.matchedfilter.sigmasq(strain, psd=psd, low_frequency_cutoff=18.) for strain, psd in zip(strains, psds)]))
-			target_snr = np_generator.uniform(5., 15.)
+			target_snr = np_gen.uniform(5., 15.)
 			sample = noise + np.stack([strain.numpy() for strain in strains], axis=0)*target_snr/network_snr
 		# If in the second part of the dataset, merely use pure noise as the full sample
 		else:
 			sample = noise
 		# Whiten
 		sample = [pycbc.types.TimeSeries(strain, delta_t=1./2048.) for strain in sample]
-		sample = [strain.whiten(0.5, 0.25, remove_corrupted=False, low_frequency_cutoff=18.) for strain in sample]
+		sample = [strain.whiten(0.5, 0.25, remove_corrupted=True, low_frequency_cutoff=18.) for strain in sample]
 		sample = np.stack([strain.numpy() for strain in sample], axis=0)
 		# Append to list of samples, as well as the corresponding label
 		samples.append(sample)
@@ -242,8 +280,6 @@ def generate_dataset(samples, verbose=0):
 			labels.append(label_wave)
 		else:
 			labels.append(label_noise)
-		if (i+1)%print_step==0:
-			logging.info("%i samples complete" % (i+1))
 	# Merge samples and labels into just two tensors (more memory efficient) and initialize dataset
 	samples = np.stack(samples, axis=0)
 	labels = np.stack(labels, axis=0)
@@ -251,7 +287,7 @@ def generate_dataset(samples, verbose=0):
 
 
 def train(Network, training_dataset, validation_dataset, output_training,
-          state_dict_path, store_device='cpu', train_device='cpu',
+          weights_path, store_device='cpu', train_device='cpu',
           batch_size=32, learning_rate=5e-5, epochs=100, clip_norm=100):
 	"""Train a network on given data.
 	
@@ -270,6 +306,8 @@ def train(Network, training_dataset, validation_dataset, output_training,
 	output_training : str
 		Path to a directory in which the loss history and the best
 		network weights will be stored.
+	weights_path: str
+		Path where the trained network weights will be stored.
 	store_device : {str, `cpu`}
 		The device on which the data sets should be stored.
 	train_device : {str, `cpu`}
@@ -299,7 +337,7 @@ def train(Network, training_dataset, validation_dataset, output_training,
 	logging.debug("Initializing loss function, optimizer and output file.")
 	loss = torch.nn.BCELoss()
 	opt = torch.optim.Adam(Network.parameters(), lr=learning_rate)
-	with open(os.path.join(output_training, 'losses.txt'), 'w', buffering=1) as outfile:
+	with open(os.path.join(output_training, 'losses.txt'), 'w') as outfile:
 
 		### Training loop
 		best_loss = 1.e10 # impossibly bad value
@@ -340,16 +378,16 @@ def train(Network, training_dataset, validation_dataset, output_training,
 			outfile.write(output_string + '\n')
 			# Save 
 			if validation_loss<best_loss:
-				torch.save(Network.state_dict(), state_dict_path)
+				torch.save(Network.state_dict(), weights_path)
 				best_loss = validation_loss
 
 		logging.debug("Training complete, closing file.")
 	
-	Network.load_state_dict(torch.load(state_dict_path))
+	Network.load_state_dict(torch.load(weights_path))
 	return Network
 
 def get_triggers(Network, inputfile, step_size=0.1,
-                 trigger_threshold=0.2, device='cpu', verbose=0):
+                 trigger_threshold=0.2, device='cpu', verbose=False):
 	"""Use a network to generate a list of triggers, where the network
 	outputs a value above a given threshold.
 	
@@ -366,7 +404,7 @@ def get_triggers(Network, inputfile, step_size=0.1,
 		triggers.
 	device : {str, `cpu`}
 		The device on which the calculations are carried out.
-	verbose : {int, 0}
+	verbose : {bool, False}
 		The verbosity level to use.
 	
 	Returns
@@ -385,24 +423,14 @@ def get_triggers(Network, inputfile, step_size=0.1,
 		                                          shuffle=False)
 		### Gradually apply network to all samples and if output exceeds the trigger threshold, save the time and the output value
 		logging.info("Starting iteration over dataset.")
-		if verbose>1:
-			print_step = 1
-		else:
-			print_step = 1000
-		to_print = print_step
-		processed = 0
-		for slice_batch, slice_times in data_loader:
+		iterable = tqdm(data_loader) if verbose else data_loader
+		for slice_batch, slice_times in iterable:
 			with torch.no_grad():
 				output_values = Network(slice_batch.to(dtype=dtype, device=device))[:, 0]
 				trigger_bools = torch.gt(output_values, trigger_threshold)
 				for slice_time, trigger_bool, output_value in zip(slice_times, trigger_bools, output_values):
 					if trigger_bool.clone().cpu().item():
 						triggers.append([slice_time.clone().cpu().item(), output_value.clone().cpu().item()])
-			processed += len(slice_times)
-			if processed>=to_print:
-				logging.info("Processed %i slices." % processed)
-				to_print += print_step
-		logging.info("Network evaluation finished with %i slices." % processed)
 		logging.info("A total of %i slices have exceeded the threshold of %f." % (len(triggers), trigger_threshold))
 	return triggers
 
@@ -472,20 +500,20 @@ def main():
 	testing_group = parser.add_argument_group('testing')
 	training_group = parser.add_argument_group('training')
 
-	parser.add_argument('--verbose', '-v', action='count', default=0, help="Desired verbosity level.")
+	parser.add_argument('--verbose', action='store_true', help="Print update messages.")
 	parser.add_argument('--debug', action='store_true', help="Show debug messages.")
 	parser.add_argument('--train', action='store_true', help="Train the network before applying.")
 
 	testing_group.add_argument('inputfile', type=str, help="The path to the input data file.")
 	testing_group.add_argument('outputfile', type=str, help="The path where to store the triggers. The file must not exist.")
-	testing_group.add_argument('-s', '--state-dict', type=str, help="The path to the state dictionary containing the network weights. If the --train option is present, the trained weights are used instead. Default: %s." % default_state_dict_fname)
+	testing_group.add_argument('-w', '--weights', type=str, help="The path to the file containing the network weights. If the --train option is present, the trained weights are used instead. Default: %s." % default_weights_fname)
 	testing_group.add_argument('-t', '--trigger-threshold', type=float, default=0.2, help="The threshold to mark triggers. Default: 0.2")
 	testing_group.add_argument('--step-size', type=float, default=0.1, help="The sliding window step size between analyzed samples. Default: 0.1")
 	testing_group.add_argument('--cluster-threshold', type=float, default=0.35, help="The farthest in time that two slices can be to form a cluster. Default: 0.35")
 	testing_group.add_argument('--device', type=str, default='cpu', help="Device to be used for analysis. Use 'cuda' for the GPU. Also, 'cpu:0', 'cuda:1', etc. (zero-indexed). Default: cpu")
 	# testing_group.add_argument('--batch-size', type=int, default=512, help="Size of batches in which the network is evaluated. Default: 512")
 
-	training_group.add_argument('-o', '--output-training', type=str, help="Path to the directory where the outputs will be stored. The directory must exist and be empty.")
+	training_group.add_argument('-o', '--output-training', type=str, help="Path to the directory where the outputs will be stored. The directory must exist.")
 	training_group.add_argument('--training-samples', type=int, nargs=2, default=[10000, 10000], help="Numbers of training samples as 'injections' 'pure noise samples'. Default: 10000 10000")
 	training_group.add_argument('--validation-samples', type=int, nargs=2, default=[2000, 2000], help="Numbers of validation samples as 'injections' 'pure noise samples'. Default: 2000 2000")
 	training_group.add_argument('--learning-rate', type=float, default=5e-5, help="Learning rate of the optimizer. Default: 0.00005")
@@ -500,8 +528,10 @@ def main():
 	### Set up logging
 	if args.debug:
 		log_level = logging.DEBUG
+	elif args.verbose:
+		log_level = logging.INFO
 	else:
-		log_level = logging.INFO if args.verbose>0 else logging.WARN
+		log_level = logging.WARN
 	logging.basicConfig(format='%(levelname)s | %(asctime)s: %(message)s', level=log_level, datefmt='%d-%m-%Y %H:%M:%S')
 
 	### Check existence of output file
@@ -512,13 +542,13 @@ def main():
 
 	### Initialize network
 	logging.debug("Initializing network.")
-	Network = get_network(path=args.state_dict, device=args.train_device)
+	Network = get_network(path=args.weights, device=args.train_device)
 
 	if args.train:
 		TrainDS = generate_dataset(args.training_samples, args.verbose)
 		ValidDS = generate_dataset(args.validation_samples, args.verbose)
-		state_dict_path = os.path.join(args.output_training, 'state_dict.pt')
-		Network = train(Network, TrainDS, ValidDS, args.output_training, state_dict_path,
+		weights_path = os.path.join(args.output_training, default_weights_fname)
+		Network = train(Network, TrainDS, ValidDS, args.output_training, weights_path,
                         store_device=args.store_device, train_device=args.train_device,
                         batch_size=args.batch_size, learning_rate=args.learning_rate,
                         epochs=args.epochs, clip_norm=args.clip_norm)
