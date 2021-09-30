@@ -1,7 +1,5 @@
 # MLGWSC-1 - Machine Learning Gravitational-Wave Search (Mock Data) Challenge
 
-**Any information contained in this repository as well as the accompanying wiki is preliminary and subject to change.**
-
 ## Introduction
 
 Welcome to the first machine learning gravitational-wave search mock 
