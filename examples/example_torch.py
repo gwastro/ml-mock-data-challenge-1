@@ -322,9 +322,9 @@ class TorchSlicer(Slicer, torch.utils.data.Dataset):
         return torch.from_numpy(next_slice), torch.tensor(next_time)
 
 
-class reg_BCELoss(nn.BCELoss):
+class reg_BCELoss(torch.nn.BCELoss):
     def __init__(self, *args, epsilon=1e-6, dim=None, **kwargs):
-        nn.BCELoss.__init__(self, *args, **kwargs)
+        torch.nn.BCELoss.__init__(self, *args, **kwargs)
         assert isinstance(dim, int)
         self.regularization_dim = dim
         self.regularization_A = epsilon
@@ -332,7 +332,7 @@ class reg_BCELoss(nn.BCELoss):
     def forward(self, inputs, target, *args, **kwargs):
         assert inputs.shape[-1]==self.regularization_dim
         transformed_input = self.regularization_A + self.regularization_B*inputs
-        return nn.BCELoss.forward(self, transformed_input, target, *args, **kwargs)
+        return torch.nn.BCELoss.forward(self, transformed_input, target, *args, **kwargs)
 
 
 def get_network(path=None, device='cpu'):
@@ -436,7 +436,7 @@ def train(Network, training_dataset, validation_dataset, output_training,
 
     ### Initialize loss function, optimizer and output file
     logging.debug("Initializing loss function, optimizer and output file.")
-    loss = torch.nn.reg_BCELoss(dim=2)
+    loss = reg_BCELoss(dim=2)
     opt = torch.optim.Adam(Network.parameters(), lr=learning_rate)
     with open(os.path.join(output_training, 'losses.txt'), 'w') as outfile:
 
