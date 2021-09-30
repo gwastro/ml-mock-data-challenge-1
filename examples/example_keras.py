@@ -1,3 +1,5 @@
+#! /usr/bin/env python
+
 ### Import modules
 from argparse import ArgumentParser
 import logging
