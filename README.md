@@ -38,9 +38,9 @@ groups until December 31st, 2021. The deadline for the final submission
 of the algorithm is Feburary 28th, 2022.
 
 On submission, we will evaluate your algorithm on a validation set. The 
-perormance on this validation set will then be reported back to you to 
+performance on this validation set will then be reported back to you to 
 check that the algorithm behaves as expected. Once we have confirmation 
-by the group that the algorithm performes within the expected margins of 
+by the group that the algorithm performs within the expected margins of 
 error, we will evaluate the submission on a secret test set that is the 
 same for all entries. The performance on this set will only be reported 
 back to the groups on the first circulation of the publication draft. 
