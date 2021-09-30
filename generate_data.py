@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""The docstring describing this program.
+"""A program to generate test-data for the MLGWSC-1.
 """
 import argparse
 import numpy as np
@@ -451,7 +451,7 @@ def get_noise(dataset, start_offset=0, duration=2592000, seed=0,
         [1, 2, 3], noise will be simulated. If dataset == 4, real noise
         will be used.
     start_offset : {int, 0}
-        <Description>
+        The amount of time from the segments to ignore in the beginning.
     duration : {int, 2592000}
         The duration of noise to generate (in seconds).
     seed : {int, 0}
@@ -465,7 +465,7 @@ def get_noise(dataset, start_offset=0, duration=2592000, seed=0,
     sample_rate : {int, 2048}
         The sample rate used for the time domain data.
     filter_duration : {float, 128}
-        <Description>
+        The duration of the filter.
     min_segment_duration : {float, 7200}
         The minimum duration in seconds any segment of the data must
         have.
@@ -638,7 +638,9 @@ def main(doc):
     parser = argparse.ArgumentParser(description=doc)
     
     parser.add_argument('-d', '--data-set', type=int, choices=[1, 2, 3, 4], default=1,
-                        help="The data set type that should be generated. <add reference to what these sets contain>")
+                        help="The data set type that should be generated. "
+                             "Please refer to https://github.com/gwastro/ml-mock-data-challenge-1/wiki/Data-Sets "
+                             "for more information.")
     parser.add_argument('-i', '--output-injection-file', type=str,
                         help=("Path at which the generated injections "
                               "should be stored. If an injection file is "
