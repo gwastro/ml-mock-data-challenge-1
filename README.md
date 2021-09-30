@@ -14,7 +14,7 @@ algorithms.
 
 The goal of this challenge is to create a collaborative publication that 
 collects state-of-the-art machine learning based gravitational-wave 
-searche algorithms and enables a comparison to classical approaches 
+search algorithms and enables a comparison to classical approaches 
 such as matched filtering or coherent burst searches. Through this, we 
 strive to highlight the advantages of different entries for specific 
 tasks and want to pinpoint areas where further research seems fruitful.
