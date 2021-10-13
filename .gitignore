@@ -1,0 +1,4 @@
+*.hdf
+_pycache__/
+segments.csv
+
