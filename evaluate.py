@@ -7,6 +7,7 @@ import numpy as np
 import h5py
 import os
 import logging
+from pycbc.conversions import distance_from_chirp_distance_mchirp
 
 def find_injection_times(fgfiles, injfile, padding_start=0, padding_end=0):
     """Determine injections which are contained in the file.
@@ -91,7 +92,10 @@ def find_closest_index(array, value, assume_sorted=False):
     ridxs[lisbetter] -= 1
     return ridxs
 
-def get_stats(fgevents, bgevents, injparams, duration=None):
+def mchirp(mass1, mass2):
+    return (mass1 * mass2) ** (3. / 5.) / (mass1 + mass2) ** (1. / 5.)
+
+def get_stats(fgevents, bgevents, injparams, duration=None, chirp_distance=False):
     """Calculate the false-alarm rate and sensitivity of a search
     algorithm.
     
@@ -133,6 +137,8 @@ def get_stats(fgevents, bgevents, injparams, duration=None):
     ret = {}
     injtimes = injparams['tc']
     dist = injparams['distance']
+    if chirp_distance:
+        massc = mchirp(injparams['mass1'], injparams['mass2'])
     if duration is None:
         duration = injtime.max() - injtimes.min()
     logging.info('Sorting foreground event times')
@@ -182,17 +188,45 @@ def get_stats(fgevents, bgevents, injparams, duration=None):
     #Calculate sensitivity
     #CARE! THIS APPLIES ONLY WHEN THE DISTRIBUTION IS CHOSEN CORRECTLY
     logging.info('Calculating sensitivity')
-    tp_sort = tpevents[1].copy()
-    tp_sort.sort()
+    sidxs = tpevents[1].argsort()
+    tp_sort = tpevents[1][sidxs]
+    if chirp_distance:
+        found_mchirp_total = massc[idxs[tpidxs]]
+        found_mchirp_total = found_mchirp_total[sidxs]
+        mchirp_max = massc.max()
     max_distance = dist.max()
     vtot = (4. / 3.) * np.pi * max_distance**3.
     Ninj = len(dist)
-    prefactor = vtot / Ninj
+    if chirp_distance:
+        mc_norm = mchirp_max ** (5. / 2.) * len(massc)
+    else:
+        mc_norm = Ninj
+    prefactor = vtot / mc_norm
     
     nfound = len(tp_sort) - np.searchsorted(tp_sort, noise_stats,
                                             side='right')
-    sample_variance = nfound / Ninj - (nfound / Ninj) ** 2
-    vol = prefactor * nfound
+    if chirp_distance:
+        #Get found chirp-mass indices for given threshold
+        fidxs = np.searchsorted(tp_sort, noise_stats, side='right')
+        found_mchirp_total = np.flip(found_mchirp_total)
+        
+        #Calculate sum(found_mchirp ** (5/2))
+        #with found_mchirp = found_mchirp_total[i:]
+        #and i looped over fidxs
+        #Code below is a vectorized form of that
+        cumsum = np.flip(np.cumsum(found_mchirp_total ** (5./2.)))
+        cumsum = np.concatenate([cumsum, np.zeros(1)])
+        mc_sum = cumsum[fidxs]
+        Ninj = np.sum((mchirp_max / massc) ** (5. / 2.))
+        
+        cumsumsq = np.flip(np.cumsum(found_mchirp_total ** 5))
+        cumsumsq = np.concatenate([cumsumsq, np.zeros(1)])
+        sample_variance_prefactor = cumsumsq[fidxs]
+        sample_variance = sample_variance_prefactor / Ninj - (mc_sum / Ninj) ** 2
+    else:
+        mc_sum = nfound
+        sample_variance = nfound / Ninj - (nfound / Ninj) ** 2
+    vol = prefactor * mc_sum
     vol_err = prefactor * (Ninj * sample_variance) ** 0.5
     rad = (3 * vol / (4 * np.pi))**(1. / 3.)
     
@@ -260,6 +294,9 @@ def main(doc):
     with h5py.File(args.injection_file, 'r') as fp:
         injparams['tc'] = fp['tc'][()][idxs]
         injparams['distance'] = fp['distance'][()][idxs]
+        injparams['mass1'] = fp['mass1'][()][idxs]
+        injparams['mass2'] = fp['mass2'][()][idxs]
+        use_chirp_distance = 'chirp_distance' in fp.keys()
     
     #Read foreground events
     logging.info(f'Reading foreground events from {args.foreground_events}')
@@ -282,7 +319,8 @@ def main(doc):
     bg_events = np.concatenate(bg_events, axis=-1)
     
     stats = get_stats(fg_events, bg_events, injparams,
-                      duration=dur)
+                      duration=dur,
+                      chirp_distance=use_chirp_distance)
     
     
     #Store results
