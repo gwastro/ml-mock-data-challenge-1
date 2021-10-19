@@ -283,10 +283,17 @@ def main(doc):
     
     #Find indices contained in foreground file
     logging.info(f'Finding injections contained in data')
+    padding_start = padding_end = 30
     dur, idxs = find_injection_times(args.foreground_files,
                                      args.injection_file,
-                                     padding_start=30,
-                                     padding_end=30)
+                                     padding_start,
+                                     padding_end)
+    
+    if idxs.sum() == 0:
+        print(f'No injections found. Stopping evaluation. Your time series'
+        'used to train your model is probably too short. Minimal duration is'
+        f" {padding_start + padding_end + 30} seconds.")
+        return
     
     #Read injection parameters
     logging.info(f'Reading injections from {args.injection_file}')
