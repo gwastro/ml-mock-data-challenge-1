@@ -25,12 +25,7 @@ from pycbc import DYN_RANGE_FAC
 from segments import OverlapSegment, SegmentList
 import ligo.segments
 
-#ToDos:
-#-Implement storage of command into final file
-#-Add a docstring
-#-Add reference to what kind of data the different sets contain
-
-TIME_STEP = 16
+TIME_STEP = 24
 TIME_WINDOW = 6
 
 def check_file_existence(fpath, force, delete=False):
@@ -341,6 +336,8 @@ class NoiseGenerator(object):
                           'aLIGOZeroDetLowPower',
                           'aLIGOLateHighSensitivityP1200087',
                           'aLIGOMidHighSensitivityP1200087']}
+    psd_options['H1'].extend([f'psds/H1/psd-{i}.hdf' for i in range(20)])
+    psd_options['L1'].extend([f'psds/L1/psd-{i}.hdf' for i in range(20)])
     def __init__(self, dataset, seed=0, filter_duration=128,
                  sample_rate=2048, low_frequency_cutoff=15,
                  detectors=['H1', 'L1']):
@@ -617,8 +614,9 @@ def make_injections(fpath, injection_file, f_lower=20, padding_start=0,
             ts = load_timeseries(fpath, group=group)
             idxs = np.where(np.logical_and(float(ts.start_time) + padding_start <= injtable['tc'],
                                            injtable['tc'] <= float(ts.end_time) - padding_end))[0]
-            injector.apply(ts, det, f_lower=f_lower,
-                           simulation_ids=list(idxs))
+            if len(idxs) > 0:
+                injector.apply(ts, det, f_lower=f_lower,
+                               simulation_ids=list(idxs))
             store_ts(store, det, ts, force=force)
             if store is None:
                 ret[det].append(ts)
@@ -722,9 +720,10 @@ def main(doc):
         msg = ("The option `--output-background-file` was not set and"
                "thus no background file will be generated or stored!")
         warnings.warn(msg, RuntimeWarning)
-        tmp_bg = True
-        args.output_background_file = os.path.join(base_path(),
-                                                   f'TMP-{time.time()}-BG.hdf')
+        if args.output_foreground_file is not None:
+            tmp_bg = True
+            args.output_background_file = os.path.join(base_path(),
+                                                       f'TMP-{time.time()}-BG.hdf')
     
     #Test if files already exist
     fpath = args.output_injection_file
@@ -747,10 +746,12 @@ def main(doc):
     tmp_inj = False
     try:
         #Generate noise background
-        logging.info('Getting noise')
-        get_noise(args.data_set, start_offset=args.start_offset,
-                  duration=args.duration, seed=args.seed,
-                  store=args.output_background_file, force=args.force)
+        if args.output_background_file is not None or \
+           args.output_foreground_file is not None:
+            logging.info('Getting noise')
+            get_noise(args.data_set, start_offset=args.start_offset,
+                      duration=args.duration, seed=args.seed,
+                      store=args.output_background_file, force=args.force)
         
         segs = load_segments()
         tstart, tend = segs.extent()
@@ -788,6 +789,12 @@ def main(doc):
         
         if args.output_foreground_file is None:
             logging.info('No output for the foreground file was specified. Skipping injections.')
+            if tmp_bg and args.output_background_file is not None:
+                if os.path.isfile(args.output_background_file):
+                    os.remove(args.output_background_file)
+            if tmp_inj and args.injection_file is not None:
+                if os.path.isfile(args.injection_file):
+                    os.remove(args.injection_file)
             return
         
         make_injections(args.output_background_file,
