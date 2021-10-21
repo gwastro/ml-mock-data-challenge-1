@@ -81,6 +81,8 @@ def find_closest_index(array, value, assume_sorted=False):
         value. Each index specifies the element in array that is closest
         to the value at the same position.
     """
+    if len(array) == 0:
+        raise ValueError('Cannot find closest index for empty input array.')
     if not assume_sorted:
         array = array.copy()
         array.sort()
@@ -283,10 +285,18 @@ def main(doc):
     
     #Find indices contained in foreground file
     logging.info(f'Finding injections contained in data')
+    padding_start, padding_end = 30, 30
     dur, idxs = find_injection_times(args.foreground_files,
                                      args.injection_file,
-                                     padding_start=30,
-                                     padding_end=30)
+                                     padding_start=padding_start,
+                                     padding_end=padding_end)
+    if np.sum(idxs) == 0:
+        msg  = 'The foreground data contains no injections! '
+        msg += 'Probably a too small section of data was generated. '
+        msg += 'Please make sure to generate at least {} seconds of data. '
+        msg += 'Otherwise a sensitive distance cannot be calculated.'
+        msg = msg.format(padding_start + padding_end + 24)
+        raise RuntimeError(msg)
     
     #Read injection parameters
     logging.info(f'Reading injections from {args.injection_file}')
