@@ -328,16 +328,8 @@ def get_real_noise(path=None, min_segment_duration=None, start_offset=0,
         return
 
 class NoiseGenerator(object):
-    psd_options = {'H1': ['aLIGOZeroDetHighPower',
-                          'aLIGOZeroDetLowPower',
-                          'aLIGOLateHighSensitivityP1200087',
-                          'aLIGOMidHighSensitivityP1200087'],
-                   'L1': ['aLIGOZeroDetHighPower',
-                          'aLIGOZeroDetLowPower',
-                          'aLIGOLateHighSensitivityP1200087',
-                          'aLIGOMidHighSensitivityP1200087']}
-    psd_options['H1'].extend([f'psds/H1/psd-{i}.hdf' for i in range(20)])
-    psd_options['L1'].extend([f'psds/L1/psd-{i}.hdf' for i in range(20)])
+    psd_options = {'H1': [f'psds/H1/psd-{i}.hdf' for i in range(20)],
+                   'L1': [f'psds/L1/psd-{i}.hdf' for i in range(20)]}
     def __init__(self, dataset, seed=0, filter_duration=128,
                  sample_rate=2048, low_frequency_cutoff=15,
                  detectors=['H1', 'L1']):
