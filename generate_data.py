@@ -336,7 +336,6 @@ class NoiseGenerator(object):
         if dataset not in [1, 2, 3]:
             raise ValueError(f'PsdGenerator is only defined for datasets 1, 2, and 3.')
         self.dataset = dataset
-        self.seed = seed
         self.filter_duration = filter_duration
         self.sample_rate = sample_rate
         self.low_frequency_cutoff = low_frequency_cutoff
@@ -344,7 +343,8 @@ class NoiseGenerator(object):
         self.fixed_psds = {det: None for det in self.detectors}
         self.delta_f = 1.0 / self.filter_duration
         self.plen = int(self.sample_rate / self.delta_f) // 2 + 1
-        self.rs = np.random.RandomState(seed=self.seed)
+        self.rs = np.random.RandomState(seed=seed)
+        self.seed = list(self.rs.randint(0, 2**32, len(self.detectors)))
     
     def __call__(self, start, end, generate_duration=3600):
         return self.get(start, end, generate_duration=generate_duration)
@@ -372,7 +372,7 @@ class NoiseGenerator(object):
         
         logging.debug(f'Generated keys {keys}')
         ret = {}
-        for det, key in keys.items():
+        for i, (det, key) in enumerate(keys.items()):
             logging.debug(f'Starting generating process for detector {det} and key {key}')
             if isinstance(key, str): #Normal case
                 if os.path.isfile(key): #Check if we have to load PSD
@@ -409,7 +409,7 @@ class NoiseGenerator(object):
                 tmp = colored_noise(psd,
                                     segstart,
                                     segend,
-                                    seed=self.seed,
+                                    seed=self.seed[i],
                                     sample_rate=self.sample_rate,
                                     low_frequency_cutoff=self.low_frequency_cutoff)
                 logging.debug(f'Succsessfully generated time domain noise')
@@ -537,7 +537,8 @@ def get_noise(dataset, start_offset=0, duration=2592000, seed=0,
                                  slide_buffer=slide_buffer,
                                  min_segment_duration=min_segment_duration,
                                  detectors=detectors,
-                                 store=store)
+                                 store=store,
+                                 seed=seed)
         if store is None:
             return seglist.get_full_seglist(shift=True, seed=seed)
         else:
