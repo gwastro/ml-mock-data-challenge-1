@@ -84,7 +84,9 @@ class Slicer(object):
         return ret
     
     def generate_data(self, key, index):
-        dt = self.detectors[0][key].attrs['delta_t']
+        # Ideally set dt = self.detectors[0][key].attrs['delta_t']
+        # Due to numerical limitations this may be off by a single sample
+        dt = 1. / 2048 #This definition limits the scope of this object
         index_step_size = int(self.step_size / dt)
         sidx = (index.start - self.n_slices[key]['start']) * index_step_size
         eidx = (index.stop - self.n_slices[key]['start']) * index_step_size + self.slice_length + 512
