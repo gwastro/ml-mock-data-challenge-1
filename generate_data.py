@@ -14,6 +14,7 @@ import time
 import requests
 import tqdm
 import csv
+import gc
 
 from pycbc.noise.reproduceable import colored_noise
 import pycbc.psd
@@ -421,6 +422,7 @@ class NoiseGenerator(object):
                     noise.append_zeros(len(tmp))
                     noise.data[-len(tmp):] = tmp.data[:]
                 done_duration += segend - segstart
+                gc.collect()
             logging.debug(f'Exited while loop with done_duration: {done_duration}')
             ret[det] = noise
         return ret
@@ -526,6 +528,7 @@ def get_noise(dataset, start_offset=0, duration=2592000, seed=0,
                     fp.attrs['slide_buffer'] = slide_buffer
                     fp.attrs['segment_path'] = segment_path if segment_path is not None else 'None'
                     fp.attrs['detectors'] = detectors
+            gc.collect()
         if store is None:
             return return_segs.get_full_seglist(shift=False)
         else:
