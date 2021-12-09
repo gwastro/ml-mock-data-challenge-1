@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Programm to plot the output of evaluate.py.
+"""Program to plot the output of evaluate.py.
 
 Basic usage:
 ./sensitivity_plot.py --files path1 path2 ... --output outpath
@@ -15,19 +15,6 @@ import h5py
 colors = dict(mcolors.BASE_COLORS, **mcolors.CSS4_COLORS)
 seconds_per_month = 30 * 24 * 60 * 60
 
-def figsize_type(inp):
-    inp = inp.replace(' ', '')
-    if not inp.startswith('(') or not inp.endswith(')'):
-        raise ValueError('Wrong format')
-    inp = inp[1:-1]
-    tmp = inp.split(',')
-    if len(tmp) != 2:
-        raise ValueError('Wrong format')
-    x, y = tmp
-    x = float(x)
-    y = float(y)
-    return x, y
-
 def none_type(inp):
     if inp.lower() == 'none':
         return None
@@ -41,26 +28,36 @@ def color_type(inp):
     return colors[inp]
 
 def limit_type(inp):
-    inp = inp.replace(' ', '')
-    if not inp.startswith('(') or not inp.endswith(')'):
-        raise ValueError('Wrong format')
-    inp = inp[1:-1]
-    tmp = inp.split(',')
-    if len(tmp) != 2:
-        raise ValueError('Wrong format')
-    lower, upper = tmp
-    if lower.lower() == 'none':
-        lower = None
-    else:
-        lower = float(lower)
-    if upper.lower() == 'none':
-        upper = None
-    else:
-        upper = float(upper)
-    return lower, upper
+    inp = none_type(inp)
+    if inp is None:
+        return inp
+    return float(inp)
+
+def sanitize_latex_math(inp):
+    inp = inp.replace('~', '\\sim')
+    return inp
+
+def sanitize_latex_text(inp):
+    inp = inp.replace('\\', '\\textbackslash')
+    inp = inp.replace('_', '\\_')
+    inp = inp.replace('~', '\\texttildelow')
+    return inp
+
+def sanitize_latex_string(inp, usetex=True):
+    if not usetex:
+        return inp
+    if inp is None:
+        return None
+    parts = inp.split('$')
+    for i, part in enumerate(parts):
+        if i % 2 == 0: #Text mode
+            parts[i] = sanitize_latex_text(part)
+        else: #Math mode
+            parts[i] = sanitize_latex_math(part)
+    inp = '$'.join(parts)
+    return inp
 
 def main(desc):
-    print(desc)
     parser = ArgumentParser(description=desc)
     
     parser.add_argument('--files', type=str, nargs='+', required=True,
@@ -70,10 +67,12 @@ def main(desc):
     parser.add_argument('--far-scaling-factor', type=float, default=seconds_per_month,
                         help="The factor by which to scale the FAR-values. The far-values (which are in units [samples/second]) are multiplied by this value.")
     
-    parser.add_argument('--figsize', type=figsize_type, default=(19.2, 10.8),
-                        help="The size of the final plot in inches.")
+    parser.add_argument('--figsize', type=float, nargs=2, default=[19.2, 10.8],
+                        help="The size of the final plot in inches. Set as `--figsize width height`.")
     parser.add_argument('--dpi', type=int, default=100,
                         help="The DPI at which to generate the figure.")
+    parser.add_argument('--fontsize', type=int, default=26,
+                        help="The font-size to use for labels and legends.")
     parser.add_argument('--labels', type=none_type, nargs='+',
                         help="Labels to add to the different files. Type `none` for no label. If any label is given the number of arguments must match the number of `--files` given.")
     parser.add_argument('--colors', type=color_type, nargs='+',
@@ -89,10 +88,10 @@ def main(desc):
     parser.add_argument('--ylabel', type=str, default="Sensitive distance [Mpc]")
     parser.add_argument('--title', type=str,
                         help="Set a title to the plot.")
-    parser.add_argument('--xlim', type=limit_type, default=(None, None),
-                        help="Set the limit on the x-axis. Format `(lower,upper)`. Either of the two value `lower` or `upper` or both may be `none`.")
-    parser.add_argument('--ylim', type=limit_type, default=(None, None),
-                        help="Set the limit on the y-axis. Format `(lower,upper)`. Either of the two value `lower` or `upper` or both may be `none`.")
+    parser.add_argument('--xlim', type=limit_type, nargs=2, default=[None, None],
+                        help="Set the limit on the x-axis. Set as `--xlim lower upper`, where `lower` and `upper` may both be int, float, or `none`. If set to `none` the default limits are used.")
+    parser.add_argument('--ylim', type=limit_type, nargs=2, default=[None, None],
+                        help="Set the limit on the y-axis. Set as `--ylim lower upper`, where `lower` and `upper` may both be int, float, or `none`. If set to `none` the default limits are used.")
     
     parser.add_argument('--show', action='store_true',
                         help="Show the resulting plot. Otherwise it will only be stored.")
@@ -112,19 +111,30 @@ def main(desc):
     if os.path.isfile(args.output) and not args.force:
         raise IOError(f'The file {args.output} already exists. Set the flag `--force` to overwrite it.')
     
+    #Setup labels for curves
     if args.labels is None:
         args.labels = args.files
     if len(args.labels) != len(args.files):
         raise ValueError('Length of files and labels must match if any label is given.')
     
+    #Sanitize for LaTeX
+    args.labels = [sanitize_latex_string(label, usetex=not args.no_tex) for label in args.labels]
+    args.xlabel = sanitize_latex_string(args.xlabel, usetex=not args.no_tex)
+    args.ylabel = sanitize_latex_string(args.ylabel, usetex=not args.no_tex)
+    args.title = sanitize_latex_string(args.title, usetex=not args.no_tex)
+    
+    #Setup colors for curves
     if args.colors is None:
         args.colors = [None] * len(args.files)
     if len(args.colors) != len(args.files):
         raise ValueError('Length of files and colors must match if any color is given.')
     
-    plt.rcParams.update({'text.usetex': not args.no_tex})
+    #Setup figure
+    plt.rcParams.update({'text.usetex': not args.no_tex,
+                         'font.size': args.fontsize})
     fig, ax = plt.subplots(figsize=args.figsize, dpi=args.dpi)
     
+    #Load and plot data
     for path, label, color in zip(args.files, args.labels, args.colors):
         logging.info(f'Loading data from {path}')
         with h5py.File(path, 'r') as fp:
@@ -136,6 +146,7 @@ def main(desc):
         logging.info(f'Plotting data from {path}')
         ax.semilogx(far, sens, label=label, color=color)
     
+    #Set x-limits
     xmin, xmax = ax.get_xlim()
     if args.xlim[0] is not None:
         xmin = args.xlim[0]
@@ -143,6 +154,7 @@ def main(desc):
         xmax = args.xlim[1]
     ax.set_xlim(xmax, xmin)
     
+    #Set y-limits
     ymin, ymax = ax.get_ylim()
     if args.ylim[0] is not None:
         ymin = args.ylim[0]
@@ -150,13 +162,15 @@ def main(desc):
         ymax = args.ylim[1]
     ax.set_ylim(ymin, ymax)
     
+    #Set aux-options
     if not args.no_legend and args.labels.count(None) < len(args.labels):
         ax.legend()
     if not args.no_grid:
         ax.grid()
-    if args.title is not None:
-        ax.title(args.title)
     
+    #Set labeling of axes
+    if args.title is not None:
+        ax.set_title(args.title)
     ax.set_xlabel(args.xlabel)
     ax.set_ylabel(args.ylabel)
     
