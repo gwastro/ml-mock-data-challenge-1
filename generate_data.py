@@ -407,12 +407,21 @@ class NoiseGenerator(object):
                 segstart = start + done_duration
                 segend = min(end, segstart + generate_duration)
                 logging.debug(f'Generation segment: {(segstart, segend)} of duration {segend - segstart}')
+                
+                #Workaround for sample-rate issues
+                pad = 0
+                duration = segend - segstart + 256
+                while 1 / (1 / (duration + pad)) != (duration + pad):
+                    pad += 1
                 tmp = colored_noise(psd,
                                     segstart,
-                                    segend,
+                                    segend+pad,
                                     seed=self.seed[i],
                                     sample_rate=self.sample_rate,
                                     low_frequency_cutoff=self.low_frequency_cutoff)
+                tmp = tmp[:len(tmp)-int(pad * tmp.sample_rate)]
+                #End of workaround for sample-rate issue
+                
                 logging.debug(f'Succsessfully generated time domain noise')
                 if noise is None:
                     logging.debug('Setting noise to tmp')
