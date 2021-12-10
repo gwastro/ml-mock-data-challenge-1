@@ -77,3 +77,6 @@ For more detailed installation instructions please refer to [this page](https://
 If you make use of the code in this repository please cite it
 accordingly. For the citation please use the bibtex-entry as well as DOI
 provided for each release at [Zenodo](https://zenodo.org/).
+
+You can use the data provided at the badge below for citation purposes:
+[![DOI](https://zenodo.org/badge/387493531.svg)](https://zenodo.org/badge/latestdoi/387493531)
