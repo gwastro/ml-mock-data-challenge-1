@@ -66,9 +66,14 @@ output-format please refer to the [Wiki](https://github.com/gwastro/ml-mock-data
 To run the code you need to have a working installation of Python 3.7 or
 higher. You will then need to install PyCBC using
 ```
-pip install -e git+https://github.com/gwastro/pycbc.git@4a8ec70d5cd86322e1cbec760568ba34f33173d8#egg=pycbc
+pip install -e git+https://github.com/gwastro/pycbc.git@efeaeb60296e15d842368d4cc9fe038b4b07ebcf#egg=pycbc
 ```
 This version of the PyCBC github was tested and confirmed to be working.
 Older versions may be missing required functions.
 
 For more detailed installation instructions please refer to [this page](https://github.com/gwastro/ml-mock-data-challenge-1/wiki/Provided-Software#requirements).
+
+## Citation
+If you make use of the code in this repository please cite it
+accordingly. For the citation please use the bibtex-entry as well as DOI
+provided for each release at [Zenodo](https://zenodo.org/).
