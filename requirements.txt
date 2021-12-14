@@ -1,0 +1,2 @@
+-e git+https://github.com/gwastro/pycbc.git@efeaeb60296e15d842368d4cc9fe038b4b07ebcf#egg=pycbc
+python-ligo-lw==1.7.1
