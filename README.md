@@ -32,8 +32,9 @@ research.
 If you want to partipate in this mock data challenge, please get in 
 contact with us by sending a mail to [mlgwsc@aei.mpg.de](mailto:mlgwsc@aei.mpg.de).
 We accept registrations up to a maximum number of 30 participating 
-groups until December 31st, 2021. The deadline for the final submission 
-of the algorithm is March 31st, 2022.
+groups until ~~December 31st, 2021~~ (We have remaining capacity. Please
+get in touch if you would still like to participate). The deadline for
+the final submission of the algorithm is March 31st, 2022.
 
 On submission, we will evaluate your algorithm on a validation set. The 
 performance on this validation set will then be reported back to you to 
