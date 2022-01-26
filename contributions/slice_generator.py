@@ -3,6 +3,7 @@ import h5py
 import queue
 import time
 import warnings
+import numpy as np
 
 
 class Slicer(object):
@@ -25,6 +26,8 @@ class Slicer(object):
     timeout : {float, 0.01}
         How long to wait when trying to read from or write to a prallel
         queue.
+    batch_size : {int, 1}
+        The number of samples to accumulate for each call to __next__.
     
     Notes
     -----
@@ -42,13 +45,14 @@ class Slicer(object):
      >>>    results = list(gen)
     """
     def __init__(self, filepath, step_size=204, window_size=2048,
-                 workers=None, prefetch=0, timeout=0.01):
+                 workers=None, prefetch=0, timeout=0.01, batch_size=1):
         self.filepath = filepath
         self.step_size = int(step_size)
         self.window_size = int(window_size)
         self.workers = workers
         self.prefetch = prefetch
         self.timeout = timeout
+        self.batch_size = batch_size
         self.entered = False
         self._init_file_vars()
         self.determine_n_slices()
@@ -76,10 +80,14 @@ class Slicer(object):
                                          'len': nsteps}
                 start += nsteps
     
-    def __len__(self):
+    @property
+    def n_samples(self):
         if not hasattr(self, 'n_slices'):
             self.determine_n_slices()
         return sum([val['len'] for val in self.n_slices.values()])
+    
+    def __len__(self):
+        return int(np.ceil(self.n_samples / self.batch_size))
     
     def empty_queues(self):
         while True:
@@ -123,14 +131,18 @@ class Slicer(object):
                                "generator was not entered. Remember to use "
                                "the generator as a context manager. Running "
                                "sequentially."), RuntimeWarning)
-            ds, dsidx = self._access_index(self.index)
-            start = dsidx * self.step_size
-            stop = start + self.window_size
-            ret = []
-            with h5py.File(self.filepath, 'r') as fp:
-                for det in self.detectors:
-                    data = fp[det][ds][start:stop]
-                    ret.append(self.process_slice(data, det))
+            batch_idxs = list(range(self.index * self.batch_size,
+                                    min(self.n_samples,
+                                        (self.index + 1) * self.batch_size)))
+            ret = [[] for _ in self.detectors]
+            for idx in batch_idxs:
+                ds, dsidx = self._access_index(idx)
+                start = dsidx * self.step_size
+                stop = start + self.window_size
+                with h5py.File(self.filepath, 'r') as fp:
+                    for i, det in enumerate(self.detectors):
+                        data = fp[det][ds][start:stop]
+                        ret[i].append(self.process_slice(data, det))
         else:  # Multiprocessing
             upper = min(self.index + self.prefetch, len(self))
             if upper > self.last_index_put:
@@ -147,6 +159,7 @@ class Slicer(object):
                     continue
         
         self.index += 1
+        ret = [np.stack(pt) for pt in ret]
         return self.format_return(ret)
     
     def _fetch_func(self, pidx, index_pipe, output_pipe, event):
@@ -157,13 +170,17 @@ class Slicer(object):
                 if ret is None:
                     try:
                         index = index_pipe.get(timeout=self.timeout)
-                        ds, dsidx = self._access_index(index)
-                        start = dsidx * self.step_size
-                        stop = start + self.window_size
-                        ret = []
-                        for det in self.detectors:
-                            data = fp[det][ds][start:stop]
-                            ret.append(self.process_slice(data, det))
+                        batch_idxs = list(range(index * self.batch_size,
+                                          min(self.n_samples,
+                                              (index + 1) * self.batch_size)))
+                        ret = [[] for _ in self.detectors]
+                        for idx in batch_idxs:
+                            ds, dsidx = self._access_index(idx)
+                            start = dsidx * self.step_size
+                            stop = start + self.window_size
+                            for i, det in enumerate(self.detectors):
+                                data = fp[det][ds][start:stop]
+                                ret[i].append(self.process_slice(data, det))
                     except queue.Empty:
                         continue
                 try:
