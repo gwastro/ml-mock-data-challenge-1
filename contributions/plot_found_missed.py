@@ -305,10 +305,10 @@ class CornerPlot(object):
                         
                         psamps = np.digitize(self.priors[name1], cbins)
                         psamps[psamps == len(cbins)] -= 1
-                        psamps = np.bincount(psamps)
+                        psamps = np.bincount(psamps, minlength=len(cbins))
                         samps = np.digitize(self.samples[name1], cbins)
                         samps[samps == len(cbins)] -= 1
-                        samps = np.bincount(samps)
+                        samps = np.bincount(samps, minlength=len(cbins))
                         
                         width = (cbins.max() - cbins.min()) / len(cbins)
                         
