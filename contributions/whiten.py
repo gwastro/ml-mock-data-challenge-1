@@ -11,6 +11,7 @@ import os.path
 import numpy as np
 from pycbc.psd import inverse_spectrum_truncation, interpolate
 import pycbc.types
+import multiprocessing as mp
 
 
 def copy_attrs(in_obj, out_obj):
@@ -144,6 +145,15 @@ def whiten(strain, delta_t=1./2048., segment_duration=0.5,
         raise ValueError("Strain numpy array dimension must be 1 or 2.")
 
 
+def worker(inp):
+    fpath = inp.pop('filepath')
+    det = inp.pop('detector')
+    key = inp.pop('segment')
+    with h5py.File(fpath, 'r') as fp:
+        data = whiten(fp[det][key][()], **inp)
+    return det, key, data
+
+
 def main(desc):
     parser = ArgumentParser(description=desc)
 
@@ -188,6 +198,11 @@ def main(desc):
                              "whitening.")
     parser.add_argument('--compress', action='store_true',
                         help="Compress the output file.")
+    parser.add_argument('--workers', type=int, default=-1,
+                        help="Number of processes to use for whitening. Set "
+                             "to a negaive number to use as many processes as "
+                             "there are CPUs available. Set to 0 to run "
+                             "sequentially. Default: -1")
 
     args = parser.parse_args()
 
@@ -201,7 +216,11 @@ def main(desc):
     logging.basicConfig(format="%(levelname)s | %(asctime)s: "
                         "%(message)s", level=log_level,
                         datefmt='%d-%m-%Y %H:%M:%S')
-
+    
+    # Set number of workers to use
+    if args.workers < 0:
+        args.workers = mp.cpu_count()
+    
     # Check existence of output file
     if os.path.isfile(args.outputfile) and not args.force:
         raise RuntimeError("Output file exists.")
@@ -221,32 +240,57 @@ def main(desc):
                            'shuffle': True}
     else:
         ds_write_kwargs = {}
-
-    with h5py.File(args.inputfile, 'r') as infile, h5py.File(
-                            args.outputfile, 'w') as outfile:
-        total = sum([len(grp) for grp in infile.values()])
+    
+    with h5py.File(args.inputfile, 'r') as fp:
+        arguments = []
+        for detector_group_name, in_detector_group in fp.items():
+            for segment_name, in_segment in in_detector_group.items():
+                tmp = {}
+                tmp['filepath'] = args.inputfile
+                tmp['detector'] = detector_group_name
+                tmp['segment'] = segment_name
+                tmp['delta_t'] = 1. / fp.attrs['sample_rate']
+                tmp['segment_duration'] = args.segment_duration
+                tmp['max_filter_duration'] = args.max_filter_duration
+                tmp['trunc_method'] = trunc_method
+                tmp['remove_corrupted'] = (not args.keep_corrupted)
+                tmp['low_frequency_cutoff'] = args.low_frequency_cutoff
+                arguments.append(tmp)
+    
+    with h5py.File(args.inputfile, 'r') as infile,\
+         h5py.File(args.outputfile, 'w') as outfile:
         copy_attrs(infile, outfile)
-        with tqdm(desc='Whitening individual datasets',
-                  disable=not args.verbose, ascii=True, total=total) as pbar:
-            for detector_group_name, in_detector_group in infile.items():
-                out_detector_group = outfile.create_group(detector_group_name)
-                copy_attrs(in_detector_group, out_detector_group)
-                for segment_name, in_segment in in_detector_group.items():
-                    segment_colored_data = in_segment[()]
-                    segment_white_data = whiten(segment_colored_data,
-                                                delta_t=1./infile.attrs['sample_rate'],  # noqa: E501
-                                                segment_duration=args.segment_duration,  # noqa: E501
-                                                max_filter_duration=args.max_filter_duration,  # noqa: E501
-                                                trunc_method=trunc_method,
-                                                remove_corrupted=(not args.keep_corrupted),  # noqa: E501
-                                                low_frequency_cutoff=args.low_frequency_cutoff)  # noqa: E501
-                    out_segment = out_detector_group.create_dataset(
-                        segment_name, data=caster(segment_white_data),
-                        **ds_write_kwargs)
-                    copy_attrs(in_segment, out_segment)
+        if args.workers > 0:
+            with mp.Pool(args.workers) as pool:
+                for det, key, data in tqdm(pool.imap_unordered(worker,
+                                                               arguments),
+                                           disable=not args.verbose,
+                                           ascii=True,
+                                           total=len(arguments)):
+                    if det not in outfile:
+                        outfile.create_group(det)
+                        copy_attrs(infile[det], outfile[det])
+                    ds = outfile[det].create_dataset(key, data=caster(data),
+                                                     **ds_write_kwargs)
+                    copy_attrs(infile[det][key], ds)
                     if not args.keep_corrupted:
-                        out_segment.attrs['start_time'] += args.max_filter_duration/2  # noqa: E501
-                    pbar.update(1)
+                        ds.attrs['start_time'] += args.max_filter_duration / 2
+        else:
+            for kwargs in tqdm(arguments,
+                               disable=not args.verbose,
+                               ascii=True):
+                del kwargs['filepath']
+                det = kwargs.pop('detector')
+                key = kwargs.pop('segment')
+                data = whiten(infile[det][key][()], **kwargs)
+                if det not in outfile:
+                    outfile.create_group(det)
+                    copy_attrs(infile[det], outfile[det])
+                ds = outfile[det].create_dataset(key, data=caster(data),
+                                                 **ds_write_kwargs)
+                copy_attrs(infile[det][key], ds)
+                if not args.keep_corrupted:
+                    ds.attrs['start_time'] += args.max_filter_duration / 2
 
 
 if __name__ == '__main__':
