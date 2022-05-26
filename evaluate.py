@@ -7,6 +7,7 @@ import numpy as np
 import h5py
 import os
 import logging
+from tqdm import tqdm
 
 
 def find_injection_times(fgfiles, injfile, padding_start=0, padding_end=0):
@@ -153,11 +154,14 @@ def get_stats(fgevents, bgevents, injparams, duration=None,
     
     logging.info('Finding injection times closest to event times')
     idxs = find_closest_index(injtimes, fgevents[0])
+    # print(idxs)
     diff = np.abs(injtimes[idxs] - fgevents[0])
     
     logging.info('Finding true- and false-positives')
-    tpidxs = np.arange(len(fgevents[0]))[diff <= fgevents[2]]
-    fpidxs = np.arange(len(fgevents[0]))[diff > fgevents[2]]
+    tpbidxs = diff <= fgevents[2]
+    tpidxs = np.arange(len(fgevents[0]))[tpbidxs]
+    fpbidxs = diff > fgevents[2]
+    fpidxs = np.arange(len(fgevents[0]))[fpbidxs]
     
     tpevents = fgevents.T[tpidxs].T
     fpevents = fgevents.T[fpidxs].T
@@ -190,14 +194,37 @@ def get_stats(fgevents, bgevents, injparams, duration=None,
     far = far / duration
     ret['far'] = far
     
+    # Find best true-positive for each injection
+    verbose = logging.root.level is logging.INFO
+    found_injections = []
+    tmpsidxs = idxs.argsort()
+    sorted_idxs = idxs[tmpsidxs]
+    iidxs = np.full(len(idxs), False)
+    for i in tqdm(range(len(injtimes)), ascii=True, disable=not verbose,
+                  desc='Determining found injections'):
+        L = np.searchsorted(sorted_idxs, i, side='left')
+        if L >= len(idxs) or sorted_idxs[L] != i:
+            continue
+        R = np.searchsorted(sorted_idxs, i, side='right')
+        # All indices that point to the same injection
+        iidxs[tmpsidxs[L:R]] = True
+        # Indices of the true-positives that belong to the same injection
+        eidxs = np.logical_and(iidxs[tmpsidxs[L:R]],
+                               tpbidxs[tmpsidxs[L:R]])  
+        if eidxs.any():
+            found_injections.append([i,
+                                    np.max(fgevents[1][tmpsidxs[L:R]][eidxs])])
+        iidxs[tmpsidxs[L:R]] = False
+    
+    found_injections = np.array(found_injections).T
+    
     # Calculate sensitivity
     # CARE! THIS APPLIES ONLY WHEN THE DISTRIBUTION IS CHOSEN CORRECTLY
     logging.info('Calculating sensitivity')
-    sidxs = tpevents[1].argsort()
-    tp_sort = tpevents[1][sidxs]
+    sidxs = found_injections[1].argsort()
+    found_injections = found_injections.T[sidxs].T  # Sort found injections
     if chirp_distance:
-        found_mchirp_total = massc[idxs[tpidxs]]
-        found_mchirp_total = found_mchirp_total[sidxs]
+        found_mchirp_total = massc[found_injections[0].astype(int)]
         mchirp_max = massc.max()
     max_distance = dist.max()
     vtot = (4. / 3.) * np.pi * max_distance**3.
@@ -208,11 +235,12 @@ def get_stats(fgevents, bgevents, injparams, duration=None,
         mc_norm = Ninj
     prefactor = vtot / mc_norm
     
-    nfound = len(tp_sort) - np.searchsorted(tp_sort, noise_stats,
-                                            side='right')
+    nfound = len(found_injections[1]) - np.searchsorted(found_injections[1],
+                                                        noise_stats,
+                                                        side='right')
     if chirp_distance:
         # Get found chirp-mass indices for given threshold
-        fidxs = np.searchsorted(tp_sort, noise_stats, side='right')
+        fidxs = np.searchsorted(found_injections[1], noise_stats, side='right')
         found_mchirp_total = np.flip(found_mchirp_total)
         
         # Calculate sum(found_mchirp ** (5/2))
