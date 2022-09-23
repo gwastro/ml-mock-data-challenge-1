@@ -1,0 +1,9 @@
+{
+  "network_type": "resnet52",
+  "dataset": 4,
+  "slice_dur": 6.25,
+  "learn_frequency_weights": false,
+  "compute_psd": true,
+  "norm": "dain",
+  "weights": "trained_models/d4_model/weights.pt"
+}
