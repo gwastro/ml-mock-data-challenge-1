@@ -77,6 +77,7 @@ For more detailed installation instructions please refer to [this page](https://
 ## Citation
 If you make use of the code in this repository please cite it
 accordingly. Please cite as
+```
 @misc{https://doi.org/10.48550/arxiv.2209.11146,
     doi = {10.48550/ARXIV.2209.11146},
     url = {https://arxiv.org/abs/2209.11146},
@@ -87,5 +88,6 @@ accordingly. Please cite as
     year = {2022},
     copyright = {arXiv.org perpetual, non-exclusive license}
 }
+```
 
 [![DOI](https://zenodo.org/badge/387493531.svg)](https://zenodo.org/badge/latestdoi/387493531)
