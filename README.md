@@ -76,8 +76,18 @@ For more detailed installation instructions please refer to [this page](https://
 
 ## Citation
 If you make use of the code in this repository please cite it
-accordingly. For the citation please use the bibtex-entry as well as DOI
-provided for each release at [Zenodo](https://zenodo.org/).
+accordingly. Please cite as
+```
+@misc{https://doi.org/10.48550/arxiv.2209.11146,
+    doi = {10.48550/ARXIV.2209.11146},
+    url = {https://arxiv.org/abs/2209.11146},
+    author = {Schäfer, Marlin B. and Zelenka, Ondřej and Nitz, Alexander H. and Wang, He and Wu, Shichao and Guo, Zong-Kuan and Cao, Zhoujian and Ren, Zhixiang and Nousi, Paraskevi and Stergioulas, Nikolaos and Iosif, Panagiotis and Koloniari, Alexandra E. and Tefas, Anastasios and Passalis, Nikolaos and Salemi, Francesco and Vedovato, Gabriele and Klimenko, Sergey and Mishra, Tanmaya and Brügmann, Bernd and Cuoco, Elena and Huerta, E. A. and Messenger, Chris and Ohme, Frank},
+    keywords = {Instrumentation and Methods for Astrophysics (astro-ph.IM), High Energy Astrophysical Phenomena (astro-ph.HE), Machine Learning (cs.LG), General Relativity and Quantum Cosmology (gr-qc), FOS: Physical sciences, FOS: Physical sciences, FOS: Computer and information sciences, FOS: Computer and information sciences},
+    title = {MLGWSC-1: The first Machine Learning Gravitational-Wave Search Mock Data Challenge},
+    publisher = {arXiv},
+    year = {2022},
+    copyright = {arXiv.org perpetual, non-exclusive license}
+}
+```
 
-You can use the data provided at the badge below for citation purposes:
 [![DOI](https://zenodo.org/badge/387493531.svg)](https://zenodo.org/badge/latestdoi/387493531)

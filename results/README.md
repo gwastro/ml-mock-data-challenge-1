@@ -1,0 +1,5 @@
+# Results
+The analysis output files exceed the github file size limit. For this reason, the files are uploaded to Zenodo and can be found [here](https://doi.org/10.5281/zenodo.5772264).
+
+## Usage
+There is a folder for each group. Each folder contains up to four sub-folders, named ds1 to ds4, corresponding to Dataset 1 to Dataset 4. In each dataset folder are 6 files. Two are named `bg.hdf` and `fg.hdf`, which contain the output of the submission on the background and foreground data respectively. The files `eval.hdf` and `eval_fg.hdf` contain the sensitive distances. The `eval_fg.hdf` file uses only the analysis output of the foreground data to obtain the sensitive distances and false-alarm rates. The files `bg-times.csv` and `fg-times.csv` contain the timing of executing the submission on the background and foreground data, respectively.
